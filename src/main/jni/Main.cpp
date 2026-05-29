@@ -866,9 +866,23 @@ void hack_injec() {
   mapAddr = Il2CppGetMethodOffset("Scripts.GameCore.dll", "Assets.Scripts.GameLogic", "ActorLinker", "ForceSetVisible", 2);
   if (mapAddr) DobbyHook(mapAddr, (void*)new_ActorForceSetVisible, (void**)&_ActorForceSetVisible);
 
-  // SGC::CheckVisible – all visibility queries return true
-  mapAddr = Il2CppGetMethodOffset("Scripts.GameCore.dll", "", "SGC", "CheckVisible", 3);
-  if (mapAddr) DobbyHook(mapAddr, (void*)new_CheckVisible, (void**)&_CheckVisible);
+  // SGC::CheckVisible – all visibility queries return true.
+  // Two 3-param overloads exist in this build:
+  //   CheckVisible(ActorLinker attacker, ActorLinker target, SGW.VisibleFlag)  ← we want this (ptr,ptr,int)
+  //   CheckVisible(uint32 attackerID,    uint32 targetID,     SGW.VisibleFlag)
+  // Count-only lookup returns whichever il2cpp enumerates first; pin it by type so
+  // the maphack=false passthrough still forwards pointer args correctly (the uint
+  // overload would truncate the 64-bit ActorLinker* to 32 bits).
+  {
+    static char* cvArgs[] = {
+      (char*)"Assets.Scripts.GameLogic.ActorLinker",
+      (char*)"Assets.Scripts.GameLogic.ActorLinker",
+      (char*)"SGW.VisibleFlag"
+    };
+    mapAddr = Il2CppGetMethodOffset("Scripts.GameCore.dll", "", "SGC", "CheckVisible", cvArgs, 3);
+    if (!mapAddr) mapAddr = Il2CppGetMethodOffset("Scripts.GameCore.dll", "", "SGC", "CheckVisible", 3);
+    if (mapAddr) DobbyHook(mapAddr, (void*)new_CheckVisible, (void**)&_CheckVisible);
+  }
 
   // ── Layer 4: position sync for out-of-sight actors ───────────────────────
   // 4a: cache real position/direction from every movement packet we see
@@ -896,8 +910,19 @@ void hack_injec() {
   }
 
   // ── Layer 5: HP sync for OOS actors ─────────────────────────────────────
-  mapAddr = Il2CppGetMethodOffset("Scripts.GameCore.dll", "", "SGC", "OnActorCurHpChange", 3);
-  if (mapAddr) DobbyHook(mapAddr, (void*)new_OnActorCurHpChange, (void**)&_OnActorCurHpChange);
+  // SGC has THREE same-arity (3-param) OnActorCurHpChange overloads in this build:
+  //   (uint32 objID, int32 curHp, int32 totalHp)                      ← our native sig
+  //   (ref PoolObjHandle<ActorLinker>& actor, int32 curHp, int32 totalHp)
+  //   (ref byte*& ptr, bool, byte)   [packet (de)serializer]
+  // Count-only lookup grabs the first il2cpp enumerates. Today that happens to be
+  // the right one, but hooking either of the others would feed our (uint32,int,int)
+  // trampoline a ref pointer in x0 → truncated/garbage objID → crash. Pin by type.
+  {
+    static char* hpArgs[] = { (char*)"System.UInt32", (char*)"System.Int32", (char*)"System.Int32" };
+    mapAddr = Il2CppGetMethodOffset("Scripts.GameCore.dll", "", "SGC", "OnActorCurHpChange", hpArgs, 3);
+    if (!mapAddr) mapAddr = Il2CppGetMethodOffset("Scripts.GameCore.dll", "", "SGC", "OnActorCurHpChange", 3);
+    if (mapAddr) DobbyHook(mapAddr, (void*)new_OnActorCurHpChange, (void**)&_OnActorCurHpChange);
+  }
 
   {
     void* fn = Il2CppGetMethodOffset("Scripts.GameCore.dll", "Assets.Scripts.GameLogic",
