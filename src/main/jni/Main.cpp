@@ -51,6 +51,7 @@
 #include "modmap.h"
 #include "modcam.h"
 #include "modesp.h"
+#include "modaim.h"
 #include "imgui/Icon.h"
 #include "imgui/Iconcpp.h"
 #include "AutoUpdate/IL2CppSDKGenerator/Il2Cpp.h"
@@ -571,6 +572,22 @@ void DrawMenu() {
             ImGui::Checkbox("Health", &g_espHealth);
             ImGui::Checkbox("Show allies too", &g_espAlly);
         }
+
+        ImGui::Spacing();
+        ImGui::Separator();
+        ImGui::Spacing();
+
+        // ── Aimbot ──────────────────────────────────────────────────────────
+        ImGui::Checkbox("Aimbot (skill)", &m_aimEnabled);
+        if (m_aimEnabled) {
+            const char* types[] = { "Lowest HP", "Lowest HP%", "Closest" };
+            ImGui::Combo("Target", &m_aimType, types, 3);
+            ImGui::SliderFloat("Range", &m_aimDist, 30.0f, 200.0f, "%.0f");
+            ImGui::SliderFloat("Prediction", &m_aimBullet, 1.0f, 30.0f, "%.0f");
+            ImGui::Checkbox("S1", &m_aimSkill1); ImGui::SameLine();
+            ImGui::Checkbox("S2", &m_aimSkill2); ImGui::SameLine();
+            ImGui::Checkbox("S3", &m_aimSkill3);
+        }
     }
     else if (activeFeature == 1) {
         ImGui::Columns(2, "deviceInfo", false);
@@ -666,6 +683,7 @@ inline EGLBoolean hook_eglSwapBuffers(EGLDisplay dpy, EGLSurface surface) {
   }
 
   g_espFrame++;
+  g_espCollect = g_espOn || m_aimEnabled;
   DrawESP();
   DrawLogo();
   DrawMenu();
@@ -1028,6 +1046,10 @@ void hack_injec() {
 
     a = Il2CppGetMethodOffset("Scripts.GameCore.dll", "Assets.Scripts.GameLogic", "ActorLinker", "HOK_OnLateUpdate", 1);
     if (a) DobbyHook(a, (void*)new_esp_HOKLateUpdate, (void**)&_esp_HOKLateUpdate);
+
+    // Aimbot: override skill aim direction
+    a = Il2CppGetMethodOffset("Scripts.GameCore.dll", "Assets.Scripts.GameLogic", "SkillControlIndicator", "GetUseSkillDirection", 0);
+    if (a) DobbyHook(a, (void*)hook_GetUseSkillDir, (void**)&_orig_GetUseSkillDir);
   }
 
   // ── Camera Zoom hooks (CameraSystem – Scripts.GameCore.dll, global namespace) ──

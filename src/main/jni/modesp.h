@@ -37,7 +37,11 @@ struct EspActor {
     uint32_t objId = 0, pid = 0;
     int      camp = 0, type = 0;
     int      hp = 0, maxHp = 0;
-    float    pos[3] = {0,0,0};
+    float    pos[3]  = {0,0,0};
+    float    prev[3] = {0,0,0};
+    float    fwd[3]  = {0,0,0};      // movement direction (normalised)
+    float    speed   = 0;            // world units / second (approx)
+    bool     hasPrev = false;
     uint32_t stamp = 0;             // frame counter for stale cleanup
 };
 
@@ -46,6 +50,7 @@ static std::mutex g_espMtx;
 static uint32_t   g_espFrame   = 0;
 static uint32_t   g_hostPid    = 0;
 static int        g_hostCamp   = -1;
+static bool       g_espCollect = false;  // set by Main: g_espOn || m_aimEnabled
 
 // ── il2cpp accessors / camera (resolved by name from Main.cpp) ──
 static int      (*_esp_getObjCamp)(void*)  = nullptr;   // ActorLinker.get_objCamp
@@ -59,7 +64,7 @@ static void     (*_esp_world2screen)(void* cam, float* world, int eye, float* ou
 static void (*_esp_HOKLateUpdate)(void* inst, int delta) = nullptr;
 static void new_esp_HOKLateUpdate(void* inst, int delta) {
     if (_esp_HOKLateUpdate) _esp_HOKLateUpdate(inst, delta);
-    if (!g_espOn || !inst) return;
+    if (!g_espCollect || !inst) return;
 
     uint32_t objId = *(uint32_t*)((uint64_t)inst + 0x4F4);
     if (!objId) return;
@@ -84,7 +89,15 @@ static void new_esp_HOKLateUpdate(void* inst, int delta) {
     EspActor& a = g_espActors[objId];
     a.objId = objId; a.pid = pid; a.camp = camp; a.type = type;
     a.hp = hp; a.maxHp = maxHp;
+    if (a.hasPrev) {
+        float dx = p[0]-a.pos[0], dz = p[2]-a.pos[2];
+        float d  = sqrtf(dx*dx + dz*dz);
+        if (d > 0.001f) { a.fwd[0]=dx/d; a.fwd[1]=0; a.fwd[2]=dz/d; }
+        a.speed = d * 60.0f;                         // per-frame dist → ~units/sec
+    }
+    a.prev[0]=a.pos[0]; a.prev[1]=a.pos[1]; a.prev[2]=a.pos[2];
     a.pos[0] = p[0]; a.pos[1] = p[1]; a.pos[2] = p[2];
+    a.hasPrev = true;
     a.stamp = g_espFrame;
     if (pid && pid == g_hostPid) g_hostCamp = camp;  // identify local camp
 }
