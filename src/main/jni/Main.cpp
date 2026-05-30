@@ -50,6 +50,7 @@
 #include "modskin.h"
 #include "modmap.h"
 #include "modcam.h"
+#include "modesp.h"
 #include "imgui/Icon.h"
 #include "imgui/Iconcpp.h"
 #include "AutoUpdate/IL2CppSDKGenerator/Il2Cpp.h"
@@ -557,6 +558,19 @@ void DrawMenu() {
         if (m_CameraZoom) {
             ImGui::SliderInt("Zoom", &m_CameraZoomValue, 0, 100);
         }
+
+        ImGui::Spacing();
+        ImGui::Separator();
+        ImGui::Spacing();
+
+        // ── ESP ────────────────────────────────────────────────────────────
+        ImGui::Checkbox("ESP", &g_espOn);
+        if (g_espOn) {
+            ImGui::Checkbox("Box", &g_espBox);      ImGui::SameLine();
+            ImGui::Checkbox("Line", &g_espLine);    ImGui::SameLine();
+            ImGui::Checkbox("Health", &g_espHealth);
+            ImGui::Checkbox("Show allies too", &g_espAlly);
+        }
     }
     else if (activeFeature == 1) {
         ImGui::Columns(2, "deviceInfo", false);
@@ -651,6 +665,8 @@ inline EGLBoolean hook_eglSwapBuffers(EGLDisplay dpy, EGLSurface surface) {
     }
   }
 
+  g_espFrame++;
+  DrawESP();
   DrawLogo();
   DrawMenu();
 
@@ -992,6 +1008,26 @@ void hack_injec() {
     } else {
       LOGD("libGameCore.so not found - native fow hook skipped");
     }
+  }
+
+  // ── ESP: resolve accessors by name + hook ActorLinker.HOK_OnLateUpdate ──
+  {
+    void* a;
+    a = Il2CppGetMethodOffset("Scripts.GameCore.dll", "Assets.Scripts.GameLogic", "ActorLinker", "get_objCamp", 0);
+    if (a) _esp_getObjCamp = (int(*)(void*))a;
+    a = Il2CppGetMethodOffset("Scripts.GameCore.dll", "Assets.Scripts.GameLogic", "ActorLinker", "get_objType", 0);
+    if (a) _esp_getObjType = (int(*)(void*))a;
+    a = Il2CppGetMethodOffset("Scripts.GameCore.dll", "Assets.Scripts.GameLogic", "ActorLinker", "get_playerId", 0);
+    if (a) _esp_getPlayerId = (uint32_t(*)(void*))a;
+    a = Il2CppGetMethodOffset("Scripts.GameCore.dll", "Assets.Scripts.GameLogic", "GamePlayerCenter", "GetPlayerCenterManager", 0);
+    if (a) _esp_getGPC = (void*(*)())a;
+    a = Il2CppGetMethodOffset("UnityEngine.CoreModule.dll", "UnityEngine", "Camera", "get_main", 0);
+    if (a) _esp_getMainCamera = (void*(*)())a;
+    a = Il2CppGetMethodOffset("UnityEngine.CoreModule.dll", "UnityEngine", "Camera", "WorldToScreenPoint_Injected", 3);
+    if (a) _esp_world2screen = (void(*)(void*,float*,int,float*))a;
+
+    a = Il2CppGetMethodOffset("Scripts.GameCore.dll", "Assets.Scripts.GameLogic", "ActorLinker", "HOK_OnLateUpdate", 1);
+    if (a) DobbyHook(a, (void*)new_esp_HOKLateUpdate, (void**)&_esp_HOKLateUpdate);
   }
 
   // ── Camera Zoom hooks (CameraSystem – Scripts.GameCore.dll, global namespace) ──
