@@ -601,15 +601,8 @@ void DrawMenu() {
         ImGui::SameLine();
         if (ImGui::Button("Reset", ImVec2(120, 0))) maphack_dbg_clear();
 
-        // Experiment A: probe ActorLinker.get_Position() (reads via native core).
+        // Probe ActorLinker.get_Position() movement (adds 'gpos' column).
         ImGui::Checkbox("Probe get_Position()  [adds 'gpos' column]", &g_probeGetPos);
-        // Experiment B: force the C# layer to pull position from the native SGW
-        // core each logic frame. Toggle ON in a match with an enemy OUT of sight:
-        // if they start moving, the native core has the live data.
-        ImGui::Checkbox("FORCE UpdatePosition() on OOS actors (live test)", &g_forceUpdatePos);
-        if (g_forceUpdatePos)
-            ImGui::TextColored(ImColor(255, 230, 0),
-                "Active: watch an out-of-sight enemy — do they move now?");
 
         ImGui::Separator();
         ImGui::Text("OOS actors tracked: %zu", maphack_oos_count());
@@ -618,8 +611,7 @@ void DrawMenu() {
             kSrcName[SRC_HOK],        (unsigned long long)g_srcCount[SRC_HOK],
             kSrcName[SRC_UPDLOGIC],   (unsigned long long)g_srcCount[SRC_UPDLOGIC],
             kSrcName[SRC_FRAMESYNC],  (unsigned long long)g_srcCount[SRC_FRAMESYNC]);
-        ImGui::Text("UpdatePosition fn: %s   get_Position fn: %s",
-            _ActorUpdatePos ? "OK" : "NULL", _ActorGetPosition ? "OK" : "NULL");
+        ImGui::Text("get_Position fn: %s", _ActorGetPosition ? "OK" : "NULL");
 
         ImGui::Spacing();
         ImGui::TextWrapped(
@@ -1007,11 +999,9 @@ void hack_injec() {
     if (tp) _TransformSetPosInj = (void (*)(void*, float*))tp;
   }
 
-  // Debug-tab experiment helpers: resolve (do NOT hook) ActorLinker.UpdatePosition()
-  // (0-arg) and get_Position(), used to probe the native SGW position source.
+  // Debug-tab helper: resolve (do NOT hook) ActorLinker.get_Position() to probe
+  // whether the presentation position advances while an actor is out of sight.
   {
-    void* up = Il2CppGetMethodOffset("Scripts.GameCore.dll", "Assets.Scripts.GameLogic", "ActorLinker", "UpdatePosition", 0);
-    if (up) _ActorUpdatePos = (void (*)(void*))up;
     void* gp = Il2CppGetMethodOffset("Scripts.GameCore.dll", "Assets.Scripts.GameLogic", "ActorLinker", "get_Position", 0);
     if (gp) _ActorGetPosition = (V3f (*)(void*))gp;
   }

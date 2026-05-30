@@ -45,9 +45,7 @@ static std::mutex g_dbgMtx;
 // get_Position() returns UnityEngine.Vector3 (3-float HFA → s0/s1/s2 on arm64).
 struct V3f { float x, y, z; };
 static V3f  (*_ActorGetPosition)(void* inst) = nullptr; // ActorLinker.get_Position()
-static void (*_ActorUpdatePos)(void* inst)   = nullptr; // ActorLinker.UpdatePosition() (0-arg)
-static bool g_probeGetPos    = false;  // measure get_Position() movement (default off: ABI probe)
-static bool g_forceUpdatePos = false;  // call UpdatePosition() on OOS actors each logic frame
+static bool g_probeGetPos = false;  // measure get_Position() movement (default off: ABI probe)
 
 // =============================================================================
 // Out-Of-Sight (OOS) actor tracking
@@ -279,13 +277,6 @@ static inline void sync_oos_transform(void* inst, int src) {
 
     void* myTransform = *(void**)((uint64_t)inst + 0x740);
     if (!myTransform || !_TransformSetPosInj) return;
-
-    // EXPERIMENT: force the C# layer to pull the current position from the native
-    // SGW core. Only once per logic frame (FrameSync path) to limit cost. If the
-    // native core holds the live position, this un-freezes ActorLinker.position.
-    if (g_forceUpdatePos && src == SRC_FRAMESYNC && _ActorUpdatePos) {
-        _ActorUpdatePos(inst);
-    }
 
     float* lpos = (float*)((uint64_t)inst + 0x50C); // ActorLinker.position (packet/render)
 
