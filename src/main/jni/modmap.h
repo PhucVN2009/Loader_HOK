@@ -11,12 +11,34 @@
 
 bool maphack = false;
 
-// Diagnostic toggle: when true, sync_oos_transform logs candidate position
-// sources for OOS actors to logcat (tag "HOKMAP").  Capture with:
-//   adb logcat -s HOKMAP:D
+// Diagnostic toggle: when true, sync_oos_transform records candidate position
+// sources for OOS actors. Surfaced live in the in-game menu's "Debug" tab, and
+// also mirrored to logcat (tag "HOKMAP", capture with: adb logcat -s HOKMAP:D).
 // Used to determine which field actually advances while an actor is out of sight.
 static bool g_mapDebug = true;
 #define HOKMAP_LOG(...) do { if (g_mapDebug) __android_log_print(ANDROID_LOG_DEBUG, "HOKMAP", __VA_ARGS__); } while (0)
+
+// ── Live debug state shared with the menu (Debug tab) ───────────────────────
+enum { SRC_INTERP = 0, SRC_HOK, SRC_UPDLOGIC, SRC_FRAMESYNC, SRC_COUNT };
+static const char* kSrcName[SRC_COUNT] = { "Interp", "HOK_Interp", "UpdateLogic", "FrameSync" };
+static uint64_t g_srcCount[SRC_COUNT] = { 0, 0, 0, 0 };
+
+// Per-OOS-actor tracking. *Move accumulates total XZ path length seen on each
+// source while the actor is out of sight — the source whose accumulator grows is
+// the live position. cur = MoveComponent.curPosition, rem = remotePosition,
+// lpos = ActorLinker.position.
+struct DbgActor {
+    uint32_t id = 0;
+    float lpos[3] = {0,0,0}, cur[3] = {0,0,0}, rem[3] = {0,0,0};
+    float lposMove = 0, curMove = 0, remMove = 0;
+    float pLpos[3] = {0,0,0}, pCur[3] = {0,0,0}, pRem[3] = {0,0,0};
+    bool  hasPrev = false;
+    bool  hasMove = false;       // MoveComponent pointer was non-null
+    uint32_t srcMask = 0;        // bitmask of hooks that drove this actor
+    uint32_t samples = 0;
+};
+static std::unordered_map<uint32_t, DbgActor> g_dbg;
+static std::mutex g_dbgMtx;
 
 // =============================================================================
 // Out-Of-Sight (OOS) actor tracking
@@ -60,6 +82,22 @@ static std::mutex                            g_oosMtx;
 static void (*_TransformSetPosInj)(void* transform, float* v3) = nullptr;
 static void (*_SetActorHp)(void* inst, int32_t curHp, int32_t totalHp) = nullptr;
 
+// Debug accessors (defined here, after g_oosMtx, for use by the menu Debug tab).
+static inline size_t maphack_oos_count() {
+    std::lock_guard<std::mutex> lk(g_oosMtx);
+    return g_oosSet.size();
+}
+static inline std::vector<DbgActor> maphack_dbg_snapshot() {
+    std::lock_guard<std::mutex> lk(g_dbgMtx);
+    std::vector<DbgActor> v; v.reserve(g_dbg.size());
+    for (auto& p : g_dbg) v.push_back(p.second);
+    return v;
+}
+static inline void maphack_dbg_clear() {
+    { std::lock_guard<std::mutex> lk(g_dbgMtx); g_dbg.clear(); }
+    for (int i = 0; i < SRC_COUNT; i++) g_srcCount[i] = 0;
+}
+
 static inline void actor_cache(void* inst) {
     if (!inst) return;
     uint32_t id = *(uint32_t*)((uint64_t)inst + 0x4F4);
@@ -78,8 +116,9 @@ static inline void oos_insert(void* inst) {
 }
 static inline void oos_remove(uint32_t id) {
     if (!id) return;
-    std::lock_guard<std::mutex> lk(g_oosMtx);
-    g_oosSet.erase(id);
+    { std::lock_guard<std::mutex> lk(g_oosMtx); g_oosSet.erase(id); }
+    // drop debug tracking so re-entered actors start a fresh movement window
+    std::lock_guard<std::mutex> lk(g_dbgMtx); g_dbg.erase(id);
 }
 
 // =============================================================================
@@ -214,7 +253,7 @@ static inline bool read_logic_pos(void* inst, float out[3]) {
     return true;
 }
 
-static inline void sync_oos_transform(void* inst, const char* src) {
+static inline void sync_oos_transform(void* inst, int src) {
     if (!maphack || !inst) return;
     uint32_t objID = *(uint32_t*)((uint64_t)inst + 0x4F4);
     if (!objID) return;
@@ -234,19 +273,28 @@ static inline void sync_oos_transform(void* inst, const char* src) {
 
     float* lpos = (float*)((uint64_t)inst + 0x50C); // ActorLinker.position (packet/render)
 
-    // ── Diagnostic: log candidate position sources for OOS actors (throttled) ──
+    // ── Diagnostic: record candidate position sources for the menu Debug tab ──
     if (g_mapDebug) {
-        static uint32_t g_dbgCount = 0;
-        if ((g_dbgCount++ % 60) == 0) {
-            void* mc = *(void**)((uint64_t)inst + 0x468);          // MoveControl
-            float* cur = mc ? (float*)((uint64_t)mc + 0x28) : nullptr; // curPosition
-            float* rem = mc ? (float*)((uint64_t)mc + 0x34) : nullptr; // remotePosition
-            HOKMAP_LOG("src=%s id=%u mc=%p lpos=(%.1f,%.1f,%.1f) cur=(%.1f,%.1f,%.1f) rem=(%.1f,%.1f,%.1f)",
-                src, objID, mc,
-                lpos[0], lpos[1], lpos[2],
-                cur ? cur[0] : 0, cur ? cur[1] : 0, cur ? cur[2] : 0,
-                rem ? rem[0] : 0, rem ? rem[1] : 0, rem ? rem[2] : 0);
-        }
+        if (src >= 0 && src < SRC_COUNT) g_srcCount[src]++;
+        void* mc   = *(void**)((uint64_t)inst + 0x468);            // MoveControl
+        float* cur = mc ? (float*)((uint64_t)mc + 0x28) : nullptr; // curPosition
+        float* rem = mc ? (float*)((uint64_t)mc + 0x34) : nullptr; // remotePosition
+
+        std::lock_guard<std::mutex> lk(g_dbgMtx);
+        DbgActor& a = g_dbg[objID];
+        a.id = objID;
+        a.hasMove = (mc != nullptr);
+        a.srcMask |= (src >= 0 && src < SRC_COUNT) ? (1u << src) : 0u;
+        a.samples++;
+        auto accum = [&](float* prev, const float* now, float& mv) {
+            if (a.hasPrev) { float dx = now[0]-prev[0], dz = now[2]-prev[2]; mv += sqrtf(dx*dx + dz*dz); }
+            prev[0]=now[0]; prev[1]=now[1]; prev[2]=now[2];
+        };
+        accum(a.pLpos, lpos, a.lposMove);
+        a.lpos[0]=lpos[0]; a.lpos[1]=lpos[1]; a.lpos[2]=lpos[2];
+        if (cur) { accum(a.pCur, cur, a.curMove); a.cur[0]=cur[0]; a.cur[1]=cur[1]; a.cur[2]=cur[2]; }
+        if (rem) { accum(a.pRem, rem, a.remMove); a.rem[0]=rem[0]; a.rem[1]=rem[1]; a.rem[2]=rem[2]; }
+        a.hasPrev = true;
     }
 
     float writePos[3];
@@ -298,7 +346,7 @@ static inline void sync_oos_transform(void* inst, const char* src) {
 static void (*_Interpolation)(void* inst) = nullptr;
 static void new_Interpolation(void* inst) {
     if (_Interpolation) _Interpolation(inst);
-    sync_oos_transform(inst, "Interp");
+    sync_oos_transform(inst, SRC_INTERP);
 }
 
 // =============================================================================
@@ -309,7 +357,7 @@ static void new_Interpolation(void* inst) {
 static void (*_HOKOnInterpolation)(void* inst) = nullptr;
 static void new_HOKOnInterpolation(void* inst) {
     if (_HOKOnInterpolation) _HOKOnInterpolation(inst);
-    sync_oos_transform(inst, "HOK_Interp");
+    sync_oos_transform(inst, SRC_HOK);
 }
 
 // =============================================================================
@@ -323,7 +371,7 @@ static void new_HOKOnInterpolation(void* inst) {
 static void (*_ActorUpdateLogic)(void* inst, int32_t delta) = nullptr;
 static void new_ActorUpdateLogic(void* inst, int32_t delta) {
     if (_ActorUpdateLogic) _ActorUpdateLogic(inst, delta);
-    sync_oos_transform(inst, "UpdateLogic");
+    sync_oos_transform(inst, SRC_UPDLOGIC);
 }
 
 // =============================================================================
@@ -352,7 +400,7 @@ static void drive_oos_sync() {
     for (auto& pr : snapshot) {
         void* inst = pr.second;
         if (*(uint32_t*)((uint64_t)inst + 0x4F4) != pr.first) continue; // stale/reused
-        sync_oos_transform(inst, "FrameSync");
+        sync_oos_transform(inst, SRC_FRAMESYNC);
     }
 }
 static void new_FrameUpdate(void* inst) {

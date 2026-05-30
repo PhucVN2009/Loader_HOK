@@ -455,8 +455,8 @@ void DrawMenu() {
     ImGui::Spacing();
 
     float padding = 15.0f;
-    float totalPadding = padding * 3;
-    float buttonWidth = (window_size.x - totalPadding) / 2.0f;
+    float totalPadding = padding * 4;
+    float buttonWidth = (window_size.x - totalPadding) / 3.0f;
     float buttonHeight = 65.0f;
 
     ImGui::SetCursorPosX(padding);
@@ -471,6 +471,14 @@ void DrawMenu() {
     ImGui::PushID(2);
     if (ImGui::Button(ICON_FA_DATABASE, ImVec2(buttonWidth, buttonHeight))) {
         activeFeature = 1;
+    }
+    ImGui::PopID();
+
+    ImGui::SameLine();
+    ImGui::SetCursorPosX(padding * 3 + buttonWidth * 2);
+    ImGui::PushID(3);
+    if (ImGui::Button(ICON_FA_BUG, ImVec2(buttonWidth, buttonHeight))) {
+        activeFeature = 2;
     }
     ImGui::PopID();
 
@@ -586,6 +594,71 @@ void DrawMenu() {
         ImGui::Spacing();
         ImGui::Separator();
         ImGui::Spacing();
+    }
+    else if (activeFeature == 2) {
+        // ── Map Hack debug: which position field is live while out-of-sight? ──
+        ImGui::Checkbox("Record OOS position debug", &g_mapDebug);
+        ImGui::SameLine();
+        if (ImGui::Button("Reset", ImVec2(120, 0))) maphack_dbg_clear();
+
+        ImGui::Text("OOS actors tracked: %zu", maphack_oos_count());
+        ImGui::Text("Hook fires (OOS):  %s=%llu  %s=%llu  %s=%llu  %s=%llu",
+            kSrcName[SRC_INTERP],     (unsigned long long)g_srcCount[SRC_INTERP],
+            kSrcName[SRC_HOK],        (unsigned long long)g_srcCount[SRC_HOK],
+            kSrcName[SRC_UPDLOGIC],   (unsigned long long)g_srcCount[SRC_UPDLOGIC],
+            kSrcName[SRC_FRAMESYNC],  (unsigned long long)g_srcCount[SRC_FRAMESYNC]);
+
+        ImGui::Spacing();
+        ImGui::TextWrapped(
+            "Go out-of-sight of an enemy that is moving, then watch the 'moved' "
+            "columns below. The column whose value KEEPS GROWING is the live "
+            "position source. If all three stay ~0, the client has no position "
+            "data for OOS actors.");
+        ImGui::Spacing();
+        ImGui::Separator();
+        ImGui::Spacing();
+
+        std::vector<DbgActor> snap = maphack_dbg_snapshot();
+        ImGui::Text("Tracked rows: %zu", snap.size());
+
+        ImGuiTableFlags tflags = ImGuiTableFlags_Borders | ImGuiTableFlags_RowBg |
+                                 ImGuiTableFlags_ScrollY | ImGuiTableFlags_SizingStretchProp;
+        if (ImGui::BeginTable("oosdbg", 5, tflags, ImVec2(-1, 320))) {
+            ImGui::TableSetupScrollFreeze(0, 1);
+            ImGui::TableSetupColumn("ID");
+            ImGui::TableSetupColumn("lpos moved");
+            ImGui::TableSetupColumn("cur moved");
+            ImGui::TableSetupColumn("rem moved");
+            ImGui::TableSetupColumn("cur (x,z)");
+            ImGui::TableHeadersRow();
+
+            int shown = 0;
+            for (auto& a : snap) {
+                if (shown++ >= 30) break;
+                ImGui::TableNextRow();
+
+                ImGui::TableSetColumnIndex(0);
+                ImGui::Text("%u", a.id);
+
+                // highlight the largest accumulator (the live source) in green
+                float mx = a.lposMove;
+                if (a.curMove > mx) mx = a.curMove;
+                if (a.remMove > mx) mx = a.remMove;
+                ImColor hot(80, 255, 120), cold(200, 200, 200);
+
+                ImGui::TableSetColumnIndex(1);
+                ImGui::TextColored((a.lposMove >= mx && mx > 1.0f) ? hot : cold, "%.0f", a.lposMove);
+                ImGui::TableSetColumnIndex(2);
+                if (a.hasMove) ImGui::TextColored((a.curMove >= mx && mx > 1.0f) ? hot : cold, "%.0f", a.curMove);
+                else           ImGui::TextColored(cold, "n/a");
+                ImGui::TableSetColumnIndex(3);
+                if (a.hasMove) ImGui::TextColored((a.remMove >= mx && mx > 1.0f) ? hot : cold, "%.0f", a.remMove);
+                else           ImGui::TextColored(cold, "n/a");
+                ImGui::TableSetColumnIndex(4);
+                ImGui::Text("%.0f, %.0f", a.cur[0], a.cur[2]);
+            }
+            ImGui::EndTable();
+        }
     }
 
     ImGui::End();
