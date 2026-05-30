@@ -260,6 +260,35 @@ static inline bool read_logic_pos(void* inst, float out[3]) {
     return true;
 }
 
+// =============================================================================
+// Un-throttle OOS actors – force ActorLinkerUpdateFreqController to keep updating.
+//
+//   ActorLinker.updateFreqController        @ 0x30 → ActorLinkerUpdateFreqController*
+//   ActorLinkerUpdateFreqController.DisableHudLogic        @ 0x08 (bool)
+//   ActorLinkerUpdateFreqController.ShouldDoUpdate         @ 0x18 (bool)
+//   ActorLinkerUpdateFreqController.ShouldDoMiniMapUpdate  @ 0x24 (bool)
+//
+// The render/interp hooks fire for OOS actors (~57k times) yet positions stay
+// frozen → the per-frame work inside Interpolation()/UpdateLogic() is gated by
+// this LOD controller. When an actor leaves view the game flips ShouldDoUpdate
+// to false, so the transform sync is skipped. Forcing it true keeps OOS actors
+// fully updated (this is what makes the difference in training camp, where the
+// position data is fully local).
+// =============================================================================
+static inline void force_update_flags(void* inst) {
+    if (!maphack || !inst) return;
+    uint32_t objID = *(uint32_t*)((uint64_t)inst + 0x4F4);
+    if (!objID) return;
+    bool isOOS;
+    { std::lock_guard<std::mutex> lk(g_oosMtx); isOOS = g_oosSet.count(objID) > 0; }
+    if (!isOOS) return;
+    void* ufc = *(void**)((uint64_t)inst + 0x30); // updateFreqController
+    if (!ufc) return;
+    *(uint8_t*)((uint64_t)ufc + 0x08) = 0; // DisableHudLogic = false
+    *(uint8_t*)((uint64_t)ufc + 0x18) = 1; // ShouldDoUpdate = true
+    *(uint8_t*)((uint64_t)ufc + 0x24) = 1; // ShouldDoMiniMapUpdate = true
+}
+
 static inline void sync_oos_transform(void* inst, int src) {
     if (!maphack || !inst) return;
     uint32_t objID = *(uint32_t*)((uint64_t)inst + 0x4F4);
@@ -357,6 +386,7 @@ static inline void sync_oos_transform(void* inst, int src) {
 // =============================================================================
 static void (*_Interpolation)(void* inst) = nullptr;
 static void new_Interpolation(void* inst) {
+    force_update_flags(inst);      // un-throttle BEFORE the game's interp runs
     if (_Interpolation) _Interpolation(inst);
     sync_oos_transform(inst, SRC_INTERP);
 }
@@ -368,6 +398,7 @@ static void new_Interpolation(void* inst) {
 // =============================================================================
 static void (*_HOKOnInterpolation)(void* inst) = nullptr;
 static void new_HOKOnInterpolation(void* inst) {
+    force_update_flags(inst);
     if (_HOKOnInterpolation) _HOKOnInterpolation(inst);
     sync_oos_transform(inst, SRC_HOK);
 }
@@ -382,8 +413,28 @@ static void new_HOKOnInterpolation(void* inst) {
 // =============================================================================
 static void (*_ActorUpdateLogic)(void* inst, int32_t delta) = nullptr;
 static void new_ActorUpdateLogic(void* inst, int32_t delta) {
+    force_update_flags(inst);
     if (_ActorUpdateLogic) _ActorUpdateLogic(inst, delta);
     sync_oos_transform(inst, SRC_UPDLOGIC);
+}
+
+// =============================================================================
+// Layer 4g – ActorLinkerUpdateFreqController::RefreshUpdateState(actor, delta)
+// The exact point where the LOD controller recomputes ShouldDoUpdate each frame.
+// Override its result to keep OOS actors fully updated, at the source.
+// =============================================================================
+static void (*_RefreshUpdateState)(void* ctrl, void* actor, float delta) = nullptr;
+static void new_RefreshUpdateState(void* ctrl, void* actor, float delta) {
+    if (_RefreshUpdateState) _RefreshUpdateState(ctrl, actor, delta);
+    if (!maphack || !ctrl || !actor) return;
+    uint32_t id = *(uint32_t*)((uint64_t)actor + 0x4F4);
+    if (!id) return;
+    bool isOOS;
+    { std::lock_guard<std::mutex> lk(g_oosMtx); isOOS = g_oosSet.count(id) > 0; }
+    if (!isOOS) return;
+    *(uint8_t*)((uint64_t)ctrl + 0x08) = 0; // DisableHudLogic = false
+    *(uint8_t*)((uint64_t)ctrl + 0x18) = 1; // ShouldDoUpdate = true
+    *(uint8_t*)((uint64_t)ctrl + 0x24) = 1; // ShouldDoMiniMapUpdate = true
 }
 
 // =============================================================================

@@ -993,6 +993,11 @@ void hack_injec() {
   mapAddr = Il2CppGetMethodOffset("Scripts.Base.dll", "Assets.Scripts.Framework", "FrameSynchr", "UpdateFrame", 0);
   if (mapAddr) DobbyHook(mapAddr, (void*)new_FrameUpdate, (void**)&_FrameUpdate);
 
+  // 4g: ActorLinkerUpdateFreqController.RefreshUpdateState(actor, delta) – override
+  //     the LOD throttle so out-of-sight actors keep updating (ShouldDoUpdate=true).
+  mapAddr = Il2CppGetMethodOffset("Scripts.GameCore.dll", "Assets.Scripts.GameLogic", "ActorLinkerUpdateFreqController", "RefreshUpdateState", 2);
+  if (mapAddr) DobbyHook(mapAddr, (void*)new_RefreshUpdateState, (void**)&_RefreshUpdateState);
+
   // Transform write helper: UnityEngine.Transform::set_position_Injected(ref Vector3)
   {
     void* tp = Il2CppGetMethodOffset("UnityEngine.CoreModule.dll", "UnityEngine", "Transform", "set_position_Injected", 1);
