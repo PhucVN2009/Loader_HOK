@@ -831,6 +831,55 @@ static int32_t new_AnoSDKGetReportData(char* buf, int32_t len)  { return 0; }
 static int32_t new_AnoSDKGetReportData3(char* buf, int32_t len) { return 0; }
 static int32_t new_AnoSDKGetReportData4(char* buf, int32_t len) { return 0; }
 
+// ─────────────────────────────────────────────────────────────────────────────
+// Auto-resolve a libGameCore.so function by an internal string it references.
+//   1. find the string in the module,
+//   2. scan exec segments for the ADRP+ADD pair that loads that string,
+//   3. walk back to the function prologue (sub sp, sp, #imm).
+// Survives game updates (string identifiers are stable) — no manual offset.
+// ─────────────────────────────────────────────────────────────────────────────
+static uintptr_t ResolveGCFuncByString(const char* lib, const char* str) {
+  auto maps = KittyMemory::getMapsByName(lib);
+  if (maps.empty()) return 0;
+  size_t slen = strlen(str);
+
+  // 1. locate the string
+  uintptr_t strAddr = 0;
+  for (auto& m : maps) {
+    if (!m.readable) continue;
+    uintptr_t r = KittyScanner::findDataFirst(m.startAddress, m.endAddress, str, slen);
+    if (r) { strAddr = r; break; }
+  }
+  if (!strAddr) return 0;
+
+  // 2. scan executable segments for ADRP(reg)+ADD(reg,#imm) == strAddr
+  uintptr_t lastPage[32]; bool has[32];
+  for (auto& m : maps) {
+    if (!m.executable) continue;
+    for (int i = 0; i < 32; i++) has[i] = false;
+    for (uintptr_t a = m.startAddress; a + 4 <= m.endAddress; a += 4) {
+      uint32_t w = *(uint32_t*)a;
+      if ((w & 0x9F000000) == 0x90000000) {            // ADRP Xd, imm
+        int rd = w & 0x1f;
+        int64_t imm = (((w >> 5) & 0x7ffff) << 2) | ((w >> 29) & 3);
+        if (imm & (1 << 20)) imm -= (1 << 21);          // sign-extend 21-bit
+        lastPage[rd] = (a & ~0xfffULL) + (imm << 12);
+        has[rd] = true;
+      } else if ((w & 0xFF800000) == 0x91000000) {      // ADD Xd, Xn, #imm12
+        int rn = (w >> 5) & 0x1f, imm12 = (w >> 10) & 0xfff;
+        if (has[rn] && (lastPage[rn] + imm12) == strAddr) {
+          // 3. walk back to prologue: sub sp, sp, #imm
+          for (uintptr_t b = a; b > a - 0x1200 && b >= m.startAddress; b -= 4) {
+            uint32_t pw = *(uint32_t*)b;
+            if ((pw & 0xFFC003FF) == 0xD10003FF) return b;  // sub sp, sp, #imm
+          }
+        }
+      }
+    }
+  }
+  return 0;
+}
+
 void hack_injec() {
   while (!unityMap.isValid()) {
     unityMap = KittyMemory::getLibraryBaseMap("libunity.so");
@@ -928,15 +977,18 @@ void hack_injec() {
   if (mapAddr) DobbyHook(mapAddr, (void*)new_ActorMgrLeaveView, (void**)&_ActorMgrLeaveView);
 
   // ── NATIVE libGameCore.so: Horizon fog – GameGridFow::IsSurfaceCellVisibleConsiderNeighbor ──
-  // Hook by static offset within libGameCore.so (memory-dump analysis). Wait for the
-  // library to be mapped, then hook base + 0x34839EC.
+  // AUTO-UPDATE: resolve the function at runtime by the internal string it
+  // references, so it survives game updates (no manual offset). Falls back to the
+  // known static offset for this build if the scan fails.
   {
     ProcMap gcMap = KittyMemory::getLibraryBaseMap("libGameCore.so");
-    for (int i = 0; i < 20 && !gcMap.isValid(); i++) { sleep(1); gcMap = KittyMemory::getLibraryBaseMap("libGameCore.so"); }
+    for (int i = 0; i < 30 && !gcMap.isValid(); i++) { sleep(1); gcMap = KittyMemory::getLibraryBaseMap("libGameCore.so"); }
     if (gcMap.isValid()) {
-      void* fn = (void*)((uintptr_t)gcMap.startAddress + 0x34839EC);
-      DobbyHook(fn, (void*)new_GC_IsCellVisible, (void**)&_GC_IsCellVisible);
-      LOGD("libGameCore.so base=%p, IsCellVisible hooked @ %p", gcMap.startAddress, fn);
+      uintptr_t fn = ResolveGCFuncByString("libGameCore.so", "IsSurfaceCellVisibleConsiderNeighbor");
+      const char* how = "auto";
+      if (!fn) { fn = (uintptr_t)gcMap.startAddress + 0x34839EC; how = "fallback-offset"; }
+      DobbyHook((void*)fn, (void*)new_GC_IsCellVisible, (void**)&_GC_IsCellVisible);
+      LOGD("libGameCore.so base=%p, IsCellVisible(%s) hooked @ %p", (void*)gcMap.startAddress, how, (void*)fn);
     } else {
       LOGD("libGameCore.so not found - native fow hook skipped");
     }
