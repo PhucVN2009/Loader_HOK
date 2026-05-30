@@ -49,6 +49,7 @@
 #include "QQInj.h"
 #include "modskin.h"
 #include "modmap.h"
+#include "modcam.h"
 #include "imgui/Icon.h"
 #include "imgui/Iconcpp.h"
 #include "AutoUpdate/IL2CppSDKGenerator/Il2Cpp.h"
@@ -546,8 +547,16 @@ void DrawMenu() {
         ImGui::Spacing();
 
         if (ImGui::Checkbox("Map Hack", &maphack)) {}
-        ImGui::TextColored(ImColor(180, 230, 255),
-            "Reveal all enemies on map and minimap");
+
+        ImGui::Spacing();
+        ImGui::Separator();
+        ImGui::Spacing();
+
+        // ── Camera Zoom ───────────────────────────────────────────────────
+        ImGui::Checkbox("Camera Zoom", &m_CameraZoom);
+        if (m_CameraZoom) {
+            ImGui::SliderInt("Zoom", &m_CameraZoomValue, 0, 100);
+        }
     }
     else if (activeFeature == 1) {
         ImGui::Columns(2, "deviceInfo", false);
@@ -931,6 +940,14 @@ void hack_injec() {
     } else {
       LOGD("libGameCore.so not found - native fow hook skipped");
     }
+  }
+
+  // ── Camera Zoom hooks (CameraSystem – Scripts.GameCore.dll, global namespace) ──
+  {
+    void* up = Il2CppGetMethodOffset("Scripts.GameCore.dll", "", "CameraSystem", "Update", 0);
+    if (up) DobbyHook(up, (void*)CameraUpdate_hook, (void**)&orig_CameraUpdate);
+    void* sz = Il2CppGetMethodOffset("Scripts.GameCore.dll", "", "CameraSystem", "set_ZoomRateFromAge", 1);
+    if (sz) set_ZoomRateFromAge = (set_ZoomRateFromAge_t)sz;
   }
 
   // ── AnoSDK bypass: hook report-data functions so no reports are uploaded ──
