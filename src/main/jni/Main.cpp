@@ -548,11 +548,6 @@ void DrawMenu() {
         if (ImGui::Checkbox("Map Hack", &maphack)) {}
         ImGui::TextColored(ImColor(180, 230, 255),
             "Reveal all enemies on map and minimap");
-
-        ImGui::Spacing();
-        ImGui::Checkbox("Native Fog Reveal (libGameCore - experimental)", &g_nativeFow);
-        ImGui::TextColored(ImColor(255, 200, 0),
-            "Hooks libGameCore.so fog. If it crashes, turn this OFF.");
     }
     else if (activeFeature == 1) {
         ImGui::Columns(2, "deviceInfo", false);

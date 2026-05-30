@@ -315,14 +315,12 @@ static void new_ActorMgrLeaveView(void* inst, uint32_t actorID, uint32_t objSeq)
 // Signature (from the prologue):  bool fn(void* this, void* arg1, int a2, int a3)
 // Forcing it to report the cell as visible reveals the fogged map.
 //
-// NOTE: untested static-analysis offset; gated behind g_nativeFow (default off)
-// so it can be toggled live and disabled instantly if it misbehaves. Offset is
-// specific to this exact libGameCore.so build.
+// NOTE: offset is specific to this exact libGameCore.so build. Driven by the
+// single "Map Hack" toggle (maphack).
 // =============================================================================
-static bool g_nativeFow = false;
 static bool (*_GC_IsCellVisible)(void* thiz, void* a1, int a2, int a3) = nullptr;
 static bool new_GC_IsCellVisible(void* thiz, void* a1, int a2, int a3) {
-    if (maphack && g_nativeFow) return true; // every surface cell "visible" → no fog
+    if (maphack) return true; // every surface cell "visible" → no fog
     return _GC_IsCellVisible ? _GC_IsCellVisible(thiz, a1, a2, a3) : false;
 }
 
