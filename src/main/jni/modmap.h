@@ -5,59 +5,8 @@
 #include <unordered_set>
 #include <mutex>
 #include <time.h>
-#include <vector>
-#include <utility>
-#include <android/log.h>
 
 bool maphack = false;
-
-// Diagnostic toggle: when true, sync_oos_transform records candidate position
-// sources for OOS actors. Surfaced live in the in-game menu's "Debug" tab, and
-// also mirrored to logcat (tag "HOKMAP", capture with: adb logcat -s HOKMAP:D).
-// Used to determine which field actually advances while an actor is out of sight.
-static bool g_mapDebug = true;
-#define HOKMAP_LOG(...) do { if (g_mapDebug) __android_log_print(ANDROID_LOG_DEBUG, "HOKMAP", __VA_ARGS__); } while (0)
-
-// ── Live debug state shared with the menu (Debug tab) ───────────────────────
-enum { SRC_INTERP = 0, SRC_HOK, SRC_UPDLOGIC, SRC_FRAMESYNC, SRC_COUNT };
-static const char* kSrcName[SRC_COUNT] = { "Interp", "HOK_Interp", "UpdateLogic", "FrameSync" };
-static uint64_t g_srcCount[SRC_COUNT] = { 0, 0, 0, 0 };
-
-// NtfActorMovementData diagnostics: does the client receive movement packets for
-// actors that are currently out-of-sight? If g_ntfOOS keeps climbing while enemies
-// are OOS, the position data IS arriving and we can apply it directly.
-static uint64_t g_ntfTotal = 0;
-static uint64_t g_ntfOOS   = 0;
-
-// Per-OOS-actor tracking. *Move accumulates total XZ path length seen on each
-// source while the actor is out of sight — the source whose accumulator grows is
-// the live position. cur = MoveComponent.curPosition, rem = remotePosition,
-// lpos = ActorLinker.position.
-struct DbgActor {
-    uint32_t id = 0;
-    float lpos[3] = {0,0,0}, cur[3] = {0,0,0}, rem[3] = {0,0,0}, gpos[3] = {0,0,0}, tf[3] = {0,0,0};
-    float lposMove = 0, curMove = 0, remMove = 0, gposMove = 0, tfMove = 0;
-    float pLpos[3] = {0,0,0}, pCur[3] = {0,0,0}, pRem[3] = {0,0,0}, pGpos[3] = {0,0,0}, pTf[3] = {0,0,0};
-    bool  hasPrev = false;
-    bool  hasMove = false;       // MoveComponent pointer was non-null
-    bool  hasGpos = false;       // get_Position() probe was active
-    bool  hasTf = false;         // transform read-back was active
-    uint32_t srcMask = 0;        // bitmask of hooks that drove this actor
-    uint32_t samples = 0;
-};
-static std::unordered_map<uint32_t, DbgActor> g_dbg;
-static std::mutex g_dbgMtx;
-
-// ── Experiments driven from the Debug tab ───────────────────────────────────
-// get_Position() returns UnityEngine.Vector3 (3-float HFA → s0/s1/s2 on arm64).
-struct V3f { float x, y, z; };
-static V3f  (*_ActorGetPosition)(void* inst) = nullptr; // ActorLinker.get_Position()
-static bool g_probeGetPos = false;  // measure get_Position() movement (default off: ABI probe)
-
-// "Boot Camp mode": never let an actor be reported out-of-vision so the game keeps
-// updating/moving it natively (in Boot Camp the local player has full vision, so
-// actors never freeze). Toggleable because it changes a by-value-struct ABI hook.
-static bool g_forceVisible = false;
 
 // =============================================================================
 // Out-Of-Sight (OOS) actor tracking
@@ -99,25 +48,7 @@ static std::unordered_set<uint32_t>          g_oosSet;
 static std::mutex                            g_oosMtx;
 
 static void (*_TransformSetPosInj)(void* transform, float* v3) = nullptr;
-static void (*_TransformGetPosInj)(void* transform, float* outV3) = nullptr;
 static void (*_SetActorHp)(void* inst, int32_t curHp, int32_t totalHp) = nullptr;
-
-// Debug accessors (defined here, after g_oosMtx, for use by the menu Debug tab).
-static inline size_t maphack_oos_count() {
-    std::lock_guard<std::mutex> lk(g_oosMtx);
-    return g_oosSet.size();
-}
-static inline std::vector<DbgActor> maphack_dbg_snapshot() {
-    std::lock_guard<std::mutex> lk(g_dbgMtx);
-    std::vector<DbgActor> v; v.reserve(g_dbg.size());
-    for (auto& p : g_dbg) v.push_back(p.second);
-    return v;
-}
-static inline void maphack_dbg_clear() {
-    { std::lock_guard<std::mutex> lk(g_dbgMtx); g_dbg.clear(); }
-    for (int i = 0; i < SRC_COUNT; i++) g_srcCount[i] = 0;
-    g_ntfTotal = 0; g_ntfOOS = 0;
-}
 
 static inline void actor_cache(void* inst) {
     if (!inst) return;
@@ -133,13 +64,11 @@ static inline void oos_insert(void* inst) {
     std::lock_guard<std::mutex> lk(g_oosMtx);
     g_oosSet.insert(id);
     g_actorPtrMap[id] = inst;
-    HOKMAP_LOG("oos_insert id=%u  (oosSet size=%zu)", id, g_oosSet.size());
 }
 static inline void oos_remove(uint32_t id) {
     if (!id) return;
-    { std::lock_guard<std::mutex> lk(g_oosMtx); g_oosSet.erase(id); }
-    // drop debug tracking so re-entered actors start a fresh movement window
-    std::lock_guard<std::mutex> lk(g_dbgMtx); g_dbg.erase(id);
+    std::lock_guard<std::mutex> lk(g_oosMtx);
+    g_oosSet.erase(id);
 }
 
 // =============================================================================
@@ -159,27 +88,6 @@ static bool (*_FowGetEnableRender)() = nullptr;
 static bool new_FowGetEnableRender() {
     if (maphack) return false;
     return _FowGetEnableRender ? _FowGetEnableRender() : false;
-}
-
-// =============================================================================
-// LAYER 0 – NtfSetActorVisible: keep every actor "visible" (Boot Camp behaviour)
-//
-// SGC.NtfSetActorVisible(objId, logicVisible, pos, dir, rot, extra) is how the
-// simulation tells the client an actor entered/left vision. Forcing logicVisible
-// true means no actor ever enters the out-of-vision state, so the game's own
-// systems keep simulating/rendering/moving it — exactly what Boot Camp does.
-// Struct args are passed by value (Vector3/Quaternion are float HFAs, VInt3 is a
-// 12-byte int aggregate); declared explicitly so the pass-through stays ABI-correct.
-// =============================================================================
-struct MapVec3 { float x, y, z; };
-struct MapVInt3 { int32_t x, y, z; };
-struct MapQuat { float x, y, z, w; };
-static void (*_NtfSetActorVisible)(uint32_t objId, bool logicVisible,
-                                   MapVec3 pos, MapVInt3 dir, MapQuat rot, void* extra) = nullptr;
-static void new_NtfSetActorVisible(uint32_t objId, bool logicVisible,
-                                   MapVec3 pos, MapVInt3 dir, MapQuat rot, void* extra) {
-    if (maphack && g_forceVisible) logicVisible = true;
-    if (_NtfSetActorVisible) _NtfSetActorVisible(objId, logicVisible, pos, dir, rot, extra);
 }
 
 // =============================================================================
@@ -232,8 +140,6 @@ static void new_NtfActorMovementData(void* dataPtr) {
     uint64_t nowNs = (uint64_t)ts.tv_sec * 1000000000ULL + (uint64_t)ts.tv_nsec;
 
     std::lock_guard<std::mutex> lk(g_oosMtx);
-    g_ntfTotal++;
-    if (g_oosSet.count(actorID) > 0) g_ntfOOS++;
     OOSData& d = g_oosMap[actorID];
     if (d.lastNs > 0) {
         float dx = pos[0]-d.pos[0], dz = pos[2]-d.pos[2];
@@ -266,142 +172,34 @@ static void new_NtfActorMoveState(uint32_t actorID, bool isMoving) {
 }
 
 // =============================================================================
-// LAYER 4 root-cause fix – live logic position from MoveComponent
-//
-//   ActorLinker.MoveControl    @ 0x468  → Assets.Scripts.GameLogic.MoveComponent*
-//   MoveComponent.curPosition  @ 0x028  → UnityEngine.Vector3 (x@0x28/y@0x2C/z@0x30)
-//
-// Why enemies froze when out-of-sight (the bug being fixed here):
-//   HOK is a deterministic frame-sync (lockstep) game: ActorLinker.UpdateLogic()
-//   steps EVERY actor's MoveComponent every logic frame, so MoveComponent
-//   .curPosition keeps advancing for heroes / monsters / soldiers even while the
-//   local player can't see them.
-//
-//   ActorLinker.position (0x50C) is a DIFFERENT field: it is written from server
-//   movement packets via ActorLinker.UpdatePosition(SGW.DisplayInfoData), and the
-//   server stops sending NtfActorMovementData for out-of-sight actors.  The old
-//   code synced myTransform from that packet field (or dead-reckoned from the last
-//   packet for ≤3 s), so once the packets stopped the actor animated in place but
-//   never moved — exactly the reported symptom.
-//
-//   Fix: for OOS actors prefer the always-live curPosition; fall back to the packet
-//   position / dead-reckoning only when MoveComponent is unavailable.
+// Shared: sync OOS actor myTransform from ActorLinker.position or dead-reckon.
+// Called from BOTH Interpolation and HOK_OnInterpolation hooks.
 // =============================================================================
-static inline bool read_logic_pos(void* inst, float out[3]) {
-    void* moveCtrl = *(void**)((uint64_t)inst + 0x468); // ActorLinker.MoveControl
-    if (!moveCtrl) return false;
-    float* cp = (float*)((uint64_t)moveCtrl + 0x28);    // MoveComponent.curPosition
-    if (cp[0] != cp[0] || cp[2] != cp[2]) return false; // reject NaN
-    if (cp[0] == 0.0f && cp[1] == 0.0f && cp[2] == 0.0f) return false; // uninitialised
-    out[0] = cp[0]; out[1] = cp[1]; out[2] = cp[2];
-    return true;
-}
-
-// =============================================================================
-// Un-throttle OOS actors – force ActorLinkerUpdateFreqController to keep updating.
-//
-//   ActorLinker.updateFreqController        @ 0x30 → ActorLinkerUpdateFreqController*
-//   ActorLinkerUpdateFreqController.DisableHudLogic        @ 0x08 (bool)
-//   ActorLinkerUpdateFreqController.ShouldDoUpdate         @ 0x18 (bool)
-//   ActorLinkerUpdateFreqController.ShouldDoMiniMapUpdate  @ 0x24 (bool)
-//
-// The render/interp hooks fire for OOS actors (~57k times) yet positions stay
-// frozen → the per-frame work inside Interpolation()/UpdateLogic() is gated by
-// this LOD controller. When an actor leaves view the game flips ShouldDoUpdate
-// to false, so the transform sync is skipped. Forcing it true keeps OOS actors
-// fully updated (this is what makes the difference in training camp, where the
-// position data is fully local).
-// =============================================================================
-static inline void force_update_flags(void* inst) {
+static inline void sync_oos_transform(void* inst) {
     if (!maphack || !inst) return;
     uint32_t objID = *(uint32_t*)((uint64_t)inst + 0x4F4);
     if (!objID) return;
-    bool isOOS;
-    { std::lock_guard<std::mutex> lk(g_oosMtx); isOOS = g_oosSet.count(objID) > 0; }
-    if (!isOOS) return;
-    void* ufc = *(void**)((uint64_t)inst + 0x30); // updateFreqController
-    if (!ufc) return;
-    *(uint8_t*)((uint64_t)ufc + 0x08) = 0; // DisableHudLogic = false
-    *(uint8_t*)((uint64_t)ufc + 0x18) = 1; // ShouldDoUpdate = true
-    *(uint8_t*)((uint64_t)ufc + 0x24) = 1; // ShouldDoMiniMapUpdate = true
-}
-
-static inline void sync_oos_transform(void* inst, int src) {
-    if (!maphack || !inst) return;
-    uint32_t objID = *(uint32_t*)((uint64_t)inst + 0x4F4);
-    if (!objID) return;
-
     if (!g_oosMtx.try_lock()) return;
     bool isOOS = g_oosSet.count(objID) > 0;
-    bool haveCache = false; OOSData d{};
-    if (isOOS) {
-        auto it = g_oosMap.find(objID);
-        if (it != g_oosMap.end() && it->second.lastNs > 0) { d = it->second; haveCache = true; }
-    }
-    g_oosMtx.unlock();
-    if (!isOOS) return;
+    if (!isOOS) { g_oosMtx.unlock(); return; }
 
     void* myTransform = *(void**)((uint64_t)inst + 0x740);
-    if (!myTransform || !_TransformSetPosInj) return;
-
-    float* lpos = (float*)((uint64_t)inst + 0x50C); // ActorLinker.position (packet/render)
-
-    // get_Position() reads the actor's live position from the native frame-sync
-    // core (proven: it advances for moving OOS actors while 0x50C stays frozen).
-    V3f gp{0,0,0}; bool gok = false;
-    if (_ActorGetPosition) { gp = _ActorGetPosition(inst); gok = true; }
-
-    // ── Diagnostic: record candidate position sources for the menu Debug tab ──
-    if (g_mapDebug) {
-        if (src >= 0 && src < SRC_COUNT) g_srcCount[src]++;
-        void* mc   = *(void**)((uint64_t)inst + 0x468);            // MoveControl
-        float* cur = mc ? (float*)((uint64_t)mc + 0x28) : nullptr; // curPosition
-        float* rem = mc ? (float*)((uint64_t)mc + 0x34) : nullptr; // remotePosition
-
-        std::lock_guard<std::mutex> lk(g_dbgMtx);
-        DbgActor& a = g_dbg[objID];
-        a.id = objID;
-        a.hasMove = (mc != nullptr);
-        a.hasGpos = gok;
-        a.srcMask |= (src >= 0 && src < SRC_COUNT) ? (1u << src) : 0u;
-        a.samples++;
-        auto accum = [&](float* prev, const float* now, float& mv) {
-            if (a.hasPrev) { float dx = now[0]-prev[0], dz = now[2]-prev[2]; mv += sqrtf(dx*dx + dz*dz); }
-            prev[0]=now[0]; prev[1]=now[1]; prev[2]=now[2];
-        };
-        accum(a.pLpos, lpos, a.lposMove);
-        a.lpos[0]=lpos[0]; a.lpos[1]=lpos[1]; a.lpos[2]=lpos[2];
-        if (cur) { accum(a.pCur, cur, a.curMove); a.cur[0]=cur[0]; a.cur[1]=cur[1]; a.cur[2]=cur[2]; }
-        if (rem) { accum(a.pRem, rem, a.remMove); a.rem[0]=rem[0]; a.rem[1]=rem[1]; a.rem[2]=rem[2]; }
-        if (gok) { accum(a.pGpos, &gp.x, a.gposMove); a.gpos[0]=gp.x; a.gpos[1]=gp.y; a.gpos[2]=gp.z; }
-        a.hasPrev = true;
-    }
+    if (!myTransform || !_TransformSetPosInj) { g_oosMtx.unlock(); return; }
 
     float writePos[3];
-    bool got = false;
+    float* lpos = (float*)((uint64_t)inst + 0x50C); // ActorLinker.position
 
-    // PRIORITY 1 – ActorLinker.get_Position(): empirically LIVE for OOS actors.
-    // The debug 'gpos' column keeps growing for moving units (minions/monsters)
-    // while the raw position field (0x50C) stays frozen — so this getter reads the
-    // actor's current position from the native frame-sync core on each call.
-    if (gok && gp.x == gp.x && gp.z == gp.z && !(gp.x == 0.0f && gp.y == 0.0f && gp.z == 0.0f)) {
-        writePos[0] = gp.x; writePos[1] = gp.y; writePos[2] = gp.z;
-        got = true;
-    }
+    auto it = g_oosMap.find(objID);
+    if (it != g_oosMap.end() && it->second.lastNs > 0) {
+        OOSData d = it->second;
+        g_oosMtx.unlock();
 
-    if (got) {
-        // live position already in writePos
-    } else if (read_logic_pos(inst, writePos)) {
-        // PRIORITY 2 – live frame-sync logic position (advances even while OOS).
-        // Logic Y is sometimes 0 (height ignored by the planar sim) → keep render Y.
-        if (writePos[1] == 0.0f && lpos[1] != 0.0f) writePos[1] = lpos[1];
-    } else if (haveCache) {
         float ddx = lpos[0]-d.pos[0], ddz = lpos[2]-d.pos[2];
         if ((ddx*ddx + ddz*ddz) > 1.0f) {
-            // PRIORITY 3 – server packet position advanced past the cache.
+            // SGW advanced ActorLinker.position → use it directly
             writePos[0]=lpos[0]; writePos[1]=lpos[1]; writePos[2]=lpos[2];
         } else {
-            // PRIORITY 4 – dead-reckon from the last cached movement packet.
+            // Both frozen → dead-reckon from last cached packet
             writePos[0]=d.pos[0]; writePos[1]=d.pos[1]; writePos[2]=d.pos[2];
             if (d.isMoving && d.speed > 0.05f) {
                 float fm = sqrtf(d.fwd[0]*d.fwd[0]+d.fwd[1]*d.fwd[1]+d.fwd[2]*d.fwd[2]);
@@ -417,48 +215,10 @@ static inline void sync_oos_transform(void* inst, int src) {
             }
         }
     } else {
-        // PRIORITY 5 – nothing better than the (possibly frozen) render position.
+        g_oosMtx.unlock();
         writePos[0]=lpos[0]; writePos[1]=lpos[1]; writePos[2]=lpos[2];
     }
-
-    // Mirror the live position back into ActorLinker.position (0x50C) so that the
-    // minimap blip (MinimapComponentNew) and any get_Position() callers move too,
-    // not just the world mesh.  Safe for OOS actors: the packet path overwrites
-    // this field again the moment the actor re-enters the local player's vision.
-    lpos[0]=writePos[0]; lpos[1]=writePos[1]; lpos[2]=writePos[2];
-
     _TransformSetPosInj(myTransform, writePos);
-
-    // The VISIBLE model is a separate pooled GameObject (ActorLinker.ActorMesh,
-    // 0x6E0 → CPooledGameObjectScript.Trans, 0x58), NOT a child of myTransform —
-    // that is why moving myTransform alone left the mesh frozen (tf mv tracked
-    // gpos mv but the model stayed put). Move the mesh transform too.
-    void* meshScript = *(void**)((uint64_t)inst + 0x6E0); // ActorMesh
-    if (meshScript) {
-        void* meshTrans = *(void**)((uint64_t)meshScript + 0x58); // CPooledGameObjectScript.Trans
-        if (meshTrans) _TransformSetPosInj(meshTrans, writePos);
-    }
-
-    // Diagnostic: read myTransform.position straight back to verify the write
-    // actually took effect on the real render transform (vs being ignored or
-    // overwritten). If tfMove stays ~0 while gposMove grows, the visual mesh is
-    // driven by a DIFFERENT transform than 0x740.
-    if (g_mapDebug && _TransformGetPosInj) {
-        float tfp[3] = {0,0,0};
-        _TransformGetPosInj(myTransform, tfp);
-        std::lock_guard<std::mutex> lk(g_dbgMtx);
-        auto it = g_dbg.find(objID);
-        if (it != g_dbg.end()) {
-            DbgActor& a = it->second;
-            if (a.hasTf) { // accumulate only after we have a previous sample
-                float dx = tfp[0]-a.pTf[0], dz = tfp[2]-a.pTf[2];
-                a.tfMove += sqrtf(dx*dx + dz*dz);
-            }
-            a.pTf[0]=tfp[0]; a.pTf[1]=tfp[1]; a.pTf[2]=tfp[2];
-            a.tf[0]=tfp[0]; a.tf[1]=tfp[1]; a.tf[2]=tfp[2];
-            a.hasTf = true;
-        }
-    }
 }
 
 // =============================================================================
@@ -468,9 +228,8 @@ static inline void sync_oos_transform(void* inst, int src) {
 // =============================================================================
 static void (*_Interpolation)(void* inst) = nullptr;
 static void new_Interpolation(void* inst) {
-    force_update_flags(inst);      // un-throttle BEFORE the game's interp runs
     if (_Interpolation) _Interpolation(inst);
-    sync_oos_transform(inst, SRC_INTERP);
+    sync_oos_transform(inst);
 }
 
 // =============================================================================
@@ -480,91 +239,8 @@ static void new_Interpolation(void* inst) {
 // =============================================================================
 static void (*_HOKOnInterpolation)(void* inst) = nullptr;
 static void new_HOKOnInterpolation(void* inst) {
-    force_update_flags(inst);
     if (_HOKOnInterpolation) _HOKOnInterpolation(inst);
-    sync_oos_transform(inst, SRC_HOK);
-}
-
-// =============================================================================
-// LAYER 4e – ActorLinker::UpdateLogic(int delta): frame-sync logic path
-// Runs once per logic frame for EVERY actor (the deterministic lockstep step that
-// produces MoveComponent.curPosition).  Guarantees position sync happens even if
-// the render-side Interpolation()/HOK_OnInterpolation() are culled for OOS actors.
-// Because sync_oos_transform also mirrors the live position into ActorLinker
-// .position (0x50C), the game's own Interpolation() then smoothly follows it.
-// =============================================================================
-static void (*_ActorUpdateLogic)(void* inst, int32_t delta) = nullptr;
-static void new_ActorUpdateLogic(void* inst, int32_t delta) {
-    force_update_flags(inst);
-    if (_ActorUpdateLogic) _ActorUpdateLogic(inst, delta);
-    sync_oos_transform(inst, SRC_UPDLOGIC);
-}
-
-// =============================================================================
-// LAYER 4h – ActorLinker::LateUpdate(): latest per-frame point before render.
-// The mesh-follow / final transform placement runs in LateUpdate, AFTER the
-// Interpolation/UpdateLogic hooks, overwriting our earlier writes. Writing the
-// live position into myTransform + ActorMesh.Trans AFTER the original LateUpdate
-// makes our position the last word, so the visible model finally follows.
-// =============================================================================
-static void (*_ActorLateUpdate)(void* inst) = nullptr;
-static void new_ActorLateUpdate(void* inst) {
-    force_update_flags(inst);
-    if (_ActorLateUpdate) _ActorLateUpdate(inst);
-    sync_oos_transform(inst, SRC_INTERP);
-}
-
-// =============================================================================
-// Layer 4g – ActorLinkerUpdateFreqController::RefreshUpdateState(actor, delta)
-// The exact point where the LOD controller recomputes ShouldDoUpdate each frame.
-// Override its result to keep OOS actors fully updated, at the source.
-// =============================================================================
-static void (*_RefreshUpdateState)(void* ctrl, void* actor, float delta) = nullptr;
-static void new_RefreshUpdateState(void* ctrl, void* actor, float delta) {
-    if (_RefreshUpdateState) _RefreshUpdateState(ctrl, actor, delta);
-    if (!maphack || !ctrl || !actor) return;
-    uint32_t id = *(uint32_t*)((uint64_t)actor + 0x4F4);
-    if (!id) return;
-    bool isOOS;
-    { std::lock_guard<std::mutex> lk(g_oosMtx); isOOS = g_oosSet.count(id) > 0; }
-    if (!isOOS) return;
-    *(uint8_t*)((uint64_t)ctrl + 0x08) = 0; // DisableHudLogic = false
-    *(uint8_t*)((uint64_t)ctrl + 0x18) = 1; // ShouldDoUpdate = true
-    *(uint8_t*)((uint64_t)ctrl + 0x24) = 1; // ShouldDoMiniMapUpdate = true
-}
-
-// =============================================================================
-// LAYER 4f – FrameSynchr::UpdateFrame(): self-driven per-logic-frame sweep
-//
-// Reliability backstop.  In a frame-sync game UpdateFrame() runs every logic
-// frame on the logic thread; from here we iterate our cached OOS actors and call
-// sync ourselves.  This works even if the game never calls Interpolation()/
-// UpdateLogic() on OOS actors (e.g. they were dropped from ActorManager's update
-// lists), which is the most likely reason earlier per-actor hooks did nothing.
-// Runs on the same thread that frees actors, and each pointer is re-validated by
-// its ObjID before use, so it is safe against stale entries.
-// =============================================================================
-static void (*_FrameUpdate)(void* inst) = nullptr;
-static void drive_oos_sync() {
-    if (!maphack) return;
-    std::vector<std::pair<uint32_t,void*>> snapshot;
-    {
-        std::lock_guard<std::mutex> lk(g_oosMtx);
-        snapshot.reserve(g_oosSet.size());
-        for (uint32_t id : g_oosSet) {
-            auto it = g_actorPtrMap.find(id);
-            if (it != g_actorPtrMap.end() && it->second) snapshot.emplace_back(id, it->second);
-        }
-    }
-    for (auto& pr : snapshot) {
-        void* inst = pr.second;
-        if (*(uint32_t*)((uint64_t)inst + 0x4F4) != pr.first) continue; // stale/reused
-        sync_oos_transform(inst, SRC_FRAMESYNC);
-    }
-}
-static void new_FrameUpdate(void* inst) {
-    if (_FrameUpdate) _FrameUpdate(inst);
-    drive_oos_sync();
+    sync_oos_transform(inst);
 }
 
 // =============================================================================

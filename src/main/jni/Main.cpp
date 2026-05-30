@@ -455,8 +455,8 @@ void DrawMenu() {
     ImGui::Spacing();
 
     float padding = 15.0f;
-    float totalPadding = padding * 4;
-    float buttonWidth = (window_size.x - totalPadding) / 3.0f;
+    float totalPadding = padding * 3;
+    float buttonWidth = (window_size.x - totalPadding) / 2.0f;
     float buttonHeight = 65.0f;
 
     ImGui::SetCursorPosX(padding);
@@ -471,14 +471,6 @@ void DrawMenu() {
     ImGui::PushID(2);
     if (ImGui::Button(ICON_FA_DATABASE, ImVec2(buttonWidth, buttonHeight))) {
         activeFeature = 1;
-    }
-    ImGui::PopID();
-
-    ImGui::SameLine();
-    ImGui::SetCursorPosX(padding * 3 + buttonWidth * 2);
-    ImGui::PushID(3);
-    if (ImGui::Button(ICON_FA_BUG, ImVec2(buttonWidth, buttonHeight))) {
-        activeFeature = 2;
     }
     ImGui::PopID();
 
@@ -594,83 +586,6 @@ void DrawMenu() {
         ImGui::Spacing();
         ImGui::Separator();
         ImGui::Spacing();
-    }
-    else if (activeFeature == 2) {
-        // ── Map Hack debug: which position field is live while out-of-sight? ──
-        ImGui::Checkbox("Record OOS position debug", &g_mapDebug);
-        ImGui::SameLine();
-        if (ImGui::Button("Reset", ImVec2(120, 0))) maphack_dbg_clear();
-
-        // Probe ActorLinker.get_Position() movement (adds 'gpos' column).
-        ImGui::Checkbox("Probe get_Position()  [adds 'gpos' column]", &g_probeGetPos);
-        // Boot Camp mode: keep every actor 'visible' so the game updates it natively.
-        ImGui::Checkbox("Boot Camp mode: force all actors visible (NtfSetActorVisible)", &g_forceVisible);
-        if (g_forceVisible)
-            ImGui::TextColored(ImColor(255, 230, 0), "Active: enemies should now move like in Boot Camp.");
-
-        ImGui::Separator();
-        ImGui::Text("OOS actors tracked: %zu", maphack_oos_count());
-        ImGui::Text("Hook fires (OOS):  %s=%llu  %s=%llu  %s=%llu  %s=%llu",
-            kSrcName[SRC_INTERP],     (unsigned long long)g_srcCount[SRC_INTERP],
-            kSrcName[SRC_HOK],        (unsigned long long)g_srcCount[SRC_HOK],
-            kSrcName[SRC_UPDLOGIC],   (unsigned long long)g_srcCount[SRC_UPDLOGIC],
-            kSrcName[SRC_FRAMESYNC],  (unsigned long long)g_srcCount[SRC_FRAMESYNC]);
-        ImGui::Text("get_Position fn: %s", _ActorGetPosition ? "OK" : "NULL");
-        ImGui::TextColored(g_ntfOOS > 0 ? ImColor(80, 255, 120) : ImColor(255, 120, 120),
-            "MovementPackets: total=%llu  for-OOS=%llu  <-- KEY",
-            (unsigned long long)g_ntfTotal, (unsigned long long)g_ntfOOS);
-
-        ImGui::Spacing();
-        ImGui::TextWrapped(
-            "The 'moved' column that KEEPS GROWING is the live position source. "
-            "If all stay ~0, the client has no position data for OOS actors.");
-        ImGui::Spacing();
-        ImGui::Separator();
-        ImGui::Spacing();
-
-        std::vector<DbgActor> snap = maphack_dbg_snapshot();
-        ImGui::Text("Tracked rows: %zu", snap.size());
-
-        ImGuiTableFlags tflags = ImGuiTableFlags_Borders | ImGuiTableFlags_RowBg |
-                                 ImGuiTableFlags_ScrollY | ImGuiTableFlags_SizingStretchProp;
-        if (ImGui::BeginTable("oosdbg", 6, tflags, ImVec2(-1, 300))) {
-            ImGui::TableSetupScrollFreeze(0, 1);
-            ImGui::TableSetupColumn("ID");
-            ImGui::TableSetupColumn("lpos mv");
-            ImGui::TableSetupColumn("cur mv");
-            ImGui::TableSetupColumn("tf mv");
-            ImGui::TableSetupColumn("gpos mv");
-            ImGui::TableSetupColumn("pos (x,z)");
-            ImGui::TableHeadersRow();
-
-            int shown = 0;
-            for (auto& a : snap) {
-                if (shown++ >= 30) break;
-                ImGui::TableNextRow();
-
-                ImGui::TableSetColumnIndex(0);
-                ImGui::Text("%u", a.id);
-
-                // highlight the largest accumulator (the live source) in green
-                float mx = a.lposMove;
-                if (a.curMove  > mx) mx = a.curMove;
-                if (a.tfMove   > mx) mx = a.tfMove;
-                if (a.gposMove > mx) mx = a.gposMove;
-                ImColor hot(80, 255, 120), cold(200, 200, 200);
-                auto cell = [&](bool has, float v) {
-                    if (has) ImGui::TextColored((v >= mx && mx > 1.0f) ? hot : cold, "%.0f", v);
-                    else     ImGui::TextColored(cold, "n/a");
-                };
-
-                ImGui::TableSetColumnIndex(1); cell(true,        a.lposMove);
-                ImGui::TableSetColumnIndex(2); cell(a.hasMove,   a.curMove);
-                ImGui::TableSetColumnIndex(3); cell(a.hasTf,     a.tfMove);
-                ImGui::TableSetColumnIndex(4); cell(a.hasGpos,   a.gposMove);
-                ImGui::TableSetColumnIndex(5);
-                ImGui::Text("%.0f, %.0f", a.lpos[0], a.lpos[2]);
-            }
-            ImGui::EndTable();
-        }
     }
 
     ImGui::End();
@@ -935,11 +850,6 @@ void hack_injec() {
 
   // ── Map Hack hooks (FogOfWar – Scripts.GameCore.dll, global namespace) ────
   void* mapAddr;
-
-  // Layer 0: SGC.NtfSetActorVisible – force logicVisible=true (Boot Camp behaviour)
-  mapAddr = Il2CppGetMethodOffset("Scripts.GameCore.dll", "", "SGC", "NtfSetActorVisible", 6);
-  if (mapAddr) DobbyHook(mapAddr, (void*)new_NtfSetActorVisible, (void**)&_NtfSetActorVisible);
-
   mapAddr = Il2CppGetMethodOffset("Scripts.GameCore.dll", "", "FogOfWar", "IsEnable", 0);
   if (mapAddr) DobbyHook(mapAddr, (void*)new_FowIsEnable, (void**)&_FowIsEnable);
 
@@ -956,23 +866,9 @@ void hack_injec() {
   mapAddr = Il2CppGetMethodOffset("Scripts.GameCore.dll", "Assets.Scripts.GameLogic", "ActorLinker", "ForceSetVisible", 2);
   if (mapAddr) DobbyHook(mapAddr, (void*)new_ActorForceSetVisible, (void**)&_ActorForceSetVisible);
 
-  // SGC::CheckVisible – all visibility queries return true.
-  // Two 3-param overloads exist in this build:
-  //   CheckVisible(ActorLinker attacker, ActorLinker target, SGW.VisibleFlag)  ← we want this (ptr,ptr,int)
-  //   CheckVisible(uint32 attackerID,    uint32 targetID,     SGW.VisibleFlag)
-  // Count-only lookup returns whichever il2cpp enumerates first; pin it by type so
-  // the maphack=false passthrough still forwards pointer args correctly (the uint
-  // overload would truncate the 64-bit ActorLinker* to 32 bits).
-  {
-    static char* cvArgs[] = {
-      (char*)"Assets.Scripts.GameLogic.ActorLinker",
-      (char*)"Assets.Scripts.GameLogic.ActorLinker",
-      (char*)"SGW.VisibleFlag"
-    };
-    mapAddr = Il2CppGetMethodOffset("Scripts.GameCore.dll", "", "SGC", "CheckVisible", cvArgs, 3);
-    if (!mapAddr) mapAddr = Il2CppGetMethodOffset("Scripts.GameCore.dll", "", "SGC", "CheckVisible", 3);
-    if (mapAddr) DobbyHook(mapAddr, (void*)new_CheckVisible, (void**)&_CheckVisible);
-  }
+  // SGC::CheckVisible – all visibility queries return true
+  mapAddr = Il2CppGetMethodOffset("Scripts.GameCore.dll", "", "SGC", "CheckVisible", 3);
+  if (mapAddr) DobbyHook(mapAddr, (void*)new_CheckVisible, (void**)&_CheckVisible);
 
   // ── Layer 4: position sync for out-of-sight actors ───────────────────────
   // 4a: cache real position/direction from every movement packet we see
@@ -993,57 +889,15 @@ void hack_injec() {
   mapAddr = Il2CppGetMethodOffset("Scripts.GameCore.dll", "Assets.Scripts.GameLogic", "ActorLinker", "HOK_OnInterpolation", 0);
   if (mapAddr) DobbyHook(mapAddr, (void*)new_HOKOnInterpolation, (void**)&_HOKOnInterpolation);
 
-  // 4e: UpdateLogic(int delta) – frame-sync logic step, runs for EVERY actor each
-  //     logic frame (this is where MoveComponent.curPosition is advanced). Syncing
-  //     here un-freezes OOS actors even when the render Interpolation path is culled.
-  mapAddr = Il2CppGetMethodOffset("Scripts.GameCore.dll", "Assets.Scripts.GameLogic", "ActorLinker", "UpdateLogic", 1);
-  if (mapAddr) DobbyHook(mapAddr, (void*)new_ActorUpdateLogic, (void**)&_ActorUpdateLogic);
-
-  // 4h: ActorLinker.LateUpdate() – latest per-frame point; write our position AFTER
-  //     the game's mesh-follow so it is not overwritten before render.
-  mapAddr = Il2CppGetMethodOffset("Scripts.GameCore.dll", "Assets.Scripts.GameLogic", "ActorLinker", "LateUpdate", 0);
-  if (mapAddr) DobbyHook(mapAddr, (void*)new_ActorLateUpdate, (void**)&_ActorLateUpdate);
-
-  // 4f: FrameSynchr.UpdateFrame() – self-driven sweep over cached OOS actors every
-  //     logic frame. Backstop for when the game stops calling the per-actor hooks
-  //     above on out-of-sight actors.
-  mapAddr = Il2CppGetMethodOffset("Scripts.Base.dll", "Assets.Scripts.Framework", "FrameSynchr", "UpdateFrame", 0);
-  if (mapAddr) DobbyHook(mapAddr, (void*)new_FrameUpdate, (void**)&_FrameUpdate);
-
-  // 4g: ActorLinkerUpdateFreqController.RefreshUpdateState(actor, delta) – override
-  //     the LOD throttle so out-of-sight actors keep updating (ShouldDoUpdate=true).
-  mapAddr = Il2CppGetMethodOffset("Scripts.GameCore.dll", "Assets.Scripts.GameLogic", "ActorLinkerUpdateFreqController", "RefreshUpdateState", 2);
-  if (mapAddr) DobbyHook(mapAddr, (void*)new_RefreshUpdateState, (void**)&_RefreshUpdateState);
-
   // Transform write helper: UnityEngine.Transform::set_position_Injected(ref Vector3)
   {
     void* tp = Il2CppGetMethodOffset("UnityEngine.CoreModule.dll", "UnityEngine", "Transform", "set_position_Injected", 1);
     if (tp) _TransformSetPosInj = (void (*)(void*, float*))tp;
-    void* gtp = Il2CppGetMethodOffset("UnityEngine.CoreModule.dll", "UnityEngine", "Transform", "get_position_Injected", 1);
-    if (gtp) _TransformGetPosInj = (void (*)(void*, float*))gtp;
-  }
-
-  // Debug-tab helper: resolve (do NOT hook) ActorLinker.get_Position() to probe
-  // whether the presentation position advances while an actor is out of sight.
-  {
-    void* gp = Il2CppGetMethodOffset("Scripts.GameCore.dll", "Assets.Scripts.GameLogic", "ActorLinker", "get_Position", 0);
-    if (gp) _ActorGetPosition = (V3f (*)(void*))gp;
   }
 
   // ── Layer 5: HP sync for OOS actors ─────────────────────────────────────
-  // SGC has THREE same-arity (3-param) OnActorCurHpChange overloads in this build:
-  //   (uint32 objID, int32 curHp, int32 totalHp)                      ← our native sig
-  //   (ref PoolObjHandle<ActorLinker>& actor, int32 curHp, int32 totalHp)
-  //   (ref byte*& ptr, bool, byte)   [packet (de)serializer]
-  // Count-only lookup grabs the first il2cpp enumerates. Today that happens to be
-  // the right one, but hooking either of the others would feed our (uint32,int,int)
-  // trampoline a ref pointer in x0 → truncated/garbage objID → crash. Pin by type.
-  {
-    static char* hpArgs[] = { (char*)"System.UInt32", (char*)"System.Int32", (char*)"System.Int32" };
-    mapAddr = Il2CppGetMethodOffset("Scripts.GameCore.dll", "", "SGC", "OnActorCurHpChange", hpArgs, 3);
-    if (!mapAddr) mapAddr = Il2CppGetMethodOffset("Scripts.GameCore.dll", "", "SGC", "OnActorCurHpChange", 3);
-    if (mapAddr) DobbyHook(mapAddr, (void*)new_OnActorCurHpChange, (void**)&_OnActorCurHpChange);
-  }
+  mapAddr = Il2CppGetMethodOffset("Scripts.GameCore.dll", "", "SGC", "OnActorCurHpChange", 3);
+  if (mapAddr) DobbyHook(mapAddr, (void*)new_OnActorCurHpChange, (void**)&_OnActorCurHpChange);
 
   {
     void* fn = Il2CppGetMethodOffset("Scripts.GameCore.dll", "Assets.Scripts.GameLogic",
