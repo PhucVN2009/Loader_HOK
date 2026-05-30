@@ -29,16 +29,25 @@ static uint64_t g_srcCount[SRC_COUNT] = { 0, 0, 0, 0 };
 // lpos = ActorLinker.position.
 struct DbgActor {
     uint32_t id = 0;
-    float lpos[3] = {0,0,0}, cur[3] = {0,0,0}, rem[3] = {0,0,0};
-    float lposMove = 0, curMove = 0, remMove = 0;
-    float pLpos[3] = {0,0,0}, pCur[3] = {0,0,0}, pRem[3] = {0,0,0};
+    float lpos[3] = {0,0,0}, cur[3] = {0,0,0}, rem[3] = {0,0,0}, gpos[3] = {0,0,0};
+    float lposMove = 0, curMove = 0, remMove = 0, gposMove = 0;
+    float pLpos[3] = {0,0,0}, pCur[3] = {0,0,0}, pRem[3] = {0,0,0}, pGpos[3] = {0,0,0};
     bool  hasPrev = false;
     bool  hasMove = false;       // MoveComponent pointer was non-null
+    bool  hasGpos = false;       // get_Position() probe was active
     uint32_t srcMask = 0;        // bitmask of hooks that drove this actor
     uint32_t samples = 0;
 };
 static std::unordered_map<uint32_t, DbgActor> g_dbg;
 static std::mutex g_dbgMtx;
+
+// ── Experiments driven from the Debug tab ───────────────────────────────────
+// get_Position() returns UnityEngine.Vector3 (3-float HFA → s0/s1/s2 on arm64).
+struct V3f { float x, y, z; };
+static V3f  (*_ActorGetPosition)(void* inst) = nullptr; // ActorLinker.get_Position()
+static void (*_ActorUpdatePos)(void* inst)   = nullptr; // ActorLinker.UpdatePosition() (0-arg)
+static bool g_probeGetPos    = false;  // measure get_Position() movement (default off: ABI probe)
+static bool g_forceUpdatePos = false;  // call UpdatePosition() on OOS actors each logic frame
 
 // =============================================================================
 // Out-Of-Sight (OOS) actor tracking
@@ -271,6 +280,13 @@ static inline void sync_oos_transform(void* inst, int src) {
     void* myTransform = *(void**)((uint64_t)inst + 0x740);
     if (!myTransform || !_TransformSetPosInj) return;
 
+    // EXPERIMENT: force the C# layer to pull the current position from the native
+    // SGW core. Only once per logic frame (FrameSync path) to limit cost. If the
+    // native core holds the live position, this un-freezes ActorLinker.position.
+    if (g_forceUpdatePos && src == SRC_FRAMESYNC && _ActorUpdatePos) {
+        _ActorUpdatePos(inst);
+    }
+
     float* lpos = (float*)((uint64_t)inst + 0x50C); // ActorLinker.position (packet/render)
 
     // ── Diagnostic: record candidate position sources for the menu Debug tab ──
@@ -280,10 +296,14 @@ static inline void sync_oos_transform(void* inst, int src) {
         float* cur = mc ? (float*)((uint64_t)mc + 0x28) : nullptr; // curPosition
         float* rem = mc ? (float*)((uint64_t)mc + 0x34) : nullptr; // remotePosition
 
+        V3f gp{0,0,0}; bool gok = false;
+        if (g_probeGetPos && _ActorGetPosition) { gp = _ActorGetPosition(inst); gok = true; }
+
         std::lock_guard<std::mutex> lk(g_dbgMtx);
         DbgActor& a = g_dbg[objID];
         a.id = objID;
         a.hasMove = (mc != nullptr);
+        a.hasGpos = gok;
         a.srcMask |= (src >= 0 && src < SRC_COUNT) ? (1u << src) : 0u;
         a.samples++;
         auto accum = [&](float* prev, const float* now, float& mv) {
@@ -294,6 +314,7 @@ static inline void sync_oos_transform(void* inst, int src) {
         a.lpos[0]=lpos[0]; a.lpos[1]=lpos[1]; a.lpos[2]=lpos[2];
         if (cur) { accum(a.pCur, cur, a.curMove); a.cur[0]=cur[0]; a.cur[1]=cur[1]; a.cur[2]=cur[2]; }
         if (rem) { accum(a.pRem, rem, a.remMove); a.rem[0]=rem[0]; a.rem[1]=rem[1]; a.rem[2]=rem[2]; }
+        if (gok) { accum(a.pGpos, &gp.x, a.gposMove); a.gpos[0]=gp.x; a.gpos[1]=gp.y; a.gpos[2]=gp.z; }
         a.hasPrev = true;
     }
 

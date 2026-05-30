@@ -601,19 +601,30 @@ void DrawMenu() {
         ImGui::SameLine();
         if (ImGui::Button("Reset", ImVec2(120, 0))) maphack_dbg_clear();
 
+        // Experiment A: probe ActorLinker.get_Position() (reads via native core).
+        ImGui::Checkbox("Probe get_Position()  [adds 'gpos' column]", &g_probeGetPos);
+        // Experiment B: force the C# layer to pull position from the native SGW
+        // core each logic frame. Toggle ON in a match with an enemy OUT of sight:
+        // if they start moving, the native core has the live data.
+        ImGui::Checkbox("FORCE UpdatePosition() on OOS actors (live test)", &g_forceUpdatePos);
+        if (g_forceUpdatePos)
+            ImGui::TextColored(ImColor(255, 230, 0),
+                "Active: watch an out-of-sight enemy — do they move now?");
+
+        ImGui::Separator();
         ImGui::Text("OOS actors tracked: %zu", maphack_oos_count());
         ImGui::Text("Hook fires (OOS):  %s=%llu  %s=%llu  %s=%llu  %s=%llu",
             kSrcName[SRC_INTERP],     (unsigned long long)g_srcCount[SRC_INTERP],
             kSrcName[SRC_HOK],        (unsigned long long)g_srcCount[SRC_HOK],
             kSrcName[SRC_UPDLOGIC],   (unsigned long long)g_srcCount[SRC_UPDLOGIC],
             kSrcName[SRC_FRAMESYNC],  (unsigned long long)g_srcCount[SRC_FRAMESYNC]);
+        ImGui::Text("UpdatePosition fn: %s   get_Position fn: %s",
+            _ActorUpdatePos ? "OK" : "NULL", _ActorGetPosition ? "OK" : "NULL");
 
         ImGui::Spacing();
         ImGui::TextWrapped(
-            "Go out-of-sight of an enemy that is moving, then watch the 'moved' "
-            "columns below. The column whose value KEEPS GROWING is the live "
-            "position source. If all three stay ~0, the client has no position "
-            "data for OOS actors.");
+            "The 'moved' column that KEEPS GROWING is the live position source. "
+            "If all stay ~0, the client has no position data for OOS actors.");
         ImGui::Spacing();
         ImGui::Separator();
         ImGui::Spacing();
@@ -623,13 +634,14 @@ void DrawMenu() {
 
         ImGuiTableFlags tflags = ImGuiTableFlags_Borders | ImGuiTableFlags_RowBg |
                                  ImGuiTableFlags_ScrollY | ImGuiTableFlags_SizingStretchProp;
-        if (ImGui::BeginTable("oosdbg", 5, tflags, ImVec2(-1, 320))) {
+        if (ImGui::BeginTable("oosdbg", 6, tflags, ImVec2(-1, 300))) {
             ImGui::TableSetupScrollFreeze(0, 1);
             ImGui::TableSetupColumn("ID");
-            ImGui::TableSetupColumn("lpos moved");
-            ImGui::TableSetupColumn("cur moved");
-            ImGui::TableSetupColumn("rem moved");
-            ImGui::TableSetupColumn("cur (x,z)");
+            ImGui::TableSetupColumn("lpos mv");
+            ImGui::TableSetupColumn("cur mv");
+            ImGui::TableSetupColumn("rem mv");
+            ImGui::TableSetupColumn("gpos mv");
+            ImGui::TableSetupColumn("pos (x,z)");
             ImGui::TableHeadersRow();
 
             int shown = 0;
@@ -642,20 +654,21 @@ void DrawMenu() {
 
                 // highlight the largest accumulator (the live source) in green
                 float mx = a.lposMove;
-                if (a.curMove > mx) mx = a.curMove;
-                if (a.remMove > mx) mx = a.remMove;
+                if (a.curMove  > mx) mx = a.curMove;
+                if (a.remMove  > mx) mx = a.remMove;
+                if (a.gposMove > mx) mx = a.gposMove;
                 ImColor hot(80, 255, 120), cold(200, 200, 200);
+                auto cell = [&](bool has, float v) {
+                    if (has) ImGui::TextColored((v >= mx && mx > 1.0f) ? hot : cold, "%.0f", v);
+                    else     ImGui::TextColored(cold, "n/a");
+                };
 
-                ImGui::TableSetColumnIndex(1);
-                ImGui::TextColored((a.lposMove >= mx && mx > 1.0f) ? hot : cold, "%.0f", a.lposMove);
-                ImGui::TableSetColumnIndex(2);
-                if (a.hasMove) ImGui::TextColored((a.curMove >= mx && mx > 1.0f) ? hot : cold, "%.0f", a.curMove);
-                else           ImGui::TextColored(cold, "n/a");
-                ImGui::TableSetColumnIndex(3);
-                if (a.hasMove) ImGui::TextColored((a.remMove >= mx && mx > 1.0f) ? hot : cold, "%.0f", a.remMove);
-                else           ImGui::TextColored(cold, "n/a");
-                ImGui::TableSetColumnIndex(4);
-                ImGui::Text("%.0f, %.0f", a.cur[0], a.cur[2]);
+                ImGui::TableSetColumnIndex(1); cell(true,        a.lposMove);
+                ImGui::TableSetColumnIndex(2); cell(a.hasMove,   a.curMove);
+                ImGui::TableSetColumnIndex(3); cell(a.hasMove,   a.remMove);
+                ImGui::TableSetColumnIndex(4); cell(a.hasGpos,   a.gposMove);
+                ImGui::TableSetColumnIndex(5);
+                ImGui::Text("%.0f, %.0f", a.lpos[0], a.lpos[2]);
             }
             ImGui::EndTable();
         }
@@ -992,6 +1005,15 @@ void hack_injec() {
   {
     void* tp = Il2CppGetMethodOffset("UnityEngine.CoreModule.dll", "UnityEngine", "Transform", "set_position_Injected", 1);
     if (tp) _TransformSetPosInj = (void (*)(void*, float*))tp;
+  }
+
+  // Debug-tab experiment helpers: resolve (do NOT hook) ActorLinker.UpdatePosition()
+  // (0-arg) and get_Position(), used to probe the native SGW position source.
+  {
+    void* up = Il2CppGetMethodOffset("Scripts.GameCore.dll", "Assets.Scripts.GameLogic", "ActorLinker", "UpdatePosition", 0);
+    if (up) _ActorUpdatePos = (void (*)(void*))up;
+    void* gp = Il2CppGetMethodOffset("Scripts.GameCore.dll", "Assets.Scripts.GameLogic", "ActorLinker", "get_Position", 0);
+    if (gp) _ActorGetPosition = (V3f (*)(void*))gp;
   }
 
   // ── Layer 5: HP sync for OOS actors ─────────────────────────────────────
