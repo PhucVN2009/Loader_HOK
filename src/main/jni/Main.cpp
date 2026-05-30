@@ -634,7 +634,7 @@ void DrawMenu() {
             ImGui::TableSetupColumn("ID");
             ImGui::TableSetupColumn("lpos mv");
             ImGui::TableSetupColumn("cur mv");
-            ImGui::TableSetupColumn("rem mv");
+            ImGui::TableSetupColumn("tf mv");
             ImGui::TableSetupColumn("gpos mv");
             ImGui::TableSetupColumn("pos (x,z)");
             ImGui::TableHeadersRow();
@@ -650,7 +650,7 @@ void DrawMenu() {
                 // highlight the largest accumulator (the live source) in green
                 float mx = a.lposMove;
                 if (a.curMove  > mx) mx = a.curMove;
-                if (a.remMove  > mx) mx = a.remMove;
+                if (a.tfMove   > mx) mx = a.tfMove;
                 if (a.gposMove > mx) mx = a.gposMove;
                 ImColor hot(80, 255, 120), cold(200, 200, 200);
                 auto cell = [&](bool has, float v) {
@@ -660,7 +660,7 @@ void DrawMenu() {
 
                 ImGui::TableSetColumnIndex(1); cell(true,        a.lposMove);
                 ImGui::TableSetColumnIndex(2); cell(a.hasMove,   a.curMove);
-                ImGui::TableSetColumnIndex(3); cell(a.hasMove,   a.remMove);
+                ImGui::TableSetColumnIndex(3); cell(a.hasTf,     a.tfMove);
                 ImGui::TableSetColumnIndex(4); cell(a.hasGpos,   a.gposMove);
                 ImGui::TableSetColumnIndex(5);
                 ImGui::Text("%.0f, %.0f", a.lpos[0], a.lpos[2]);
@@ -1005,6 +1005,8 @@ void hack_injec() {
   {
     void* tp = Il2CppGetMethodOffset("UnityEngine.CoreModule.dll", "UnityEngine", "Transform", "set_position_Injected", 1);
     if (tp) _TransformSetPosInj = (void (*)(void*, float*))tp;
+    void* gtp = Il2CppGetMethodOffset("UnityEngine.CoreModule.dll", "UnityEngine", "Transform", "get_position_Injected", 1);
+    if (gtp) _TransformGetPosInj = (void (*)(void*, float*))gtp;
   }
 
   // Debug-tab helper: resolve (do NOT hook) ActorLinker.get_Position() to probe

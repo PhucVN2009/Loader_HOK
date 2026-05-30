@@ -35,12 +35,13 @@ static uint64_t g_ntfOOS   = 0;
 // lpos = ActorLinker.position.
 struct DbgActor {
     uint32_t id = 0;
-    float lpos[3] = {0,0,0}, cur[3] = {0,0,0}, rem[3] = {0,0,0}, gpos[3] = {0,0,0};
-    float lposMove = 0, curMove = 0, remMove = 0, gposMove = 0;
-    float pLpos[3] = {0,0,0}, pCur[3] = {0,0,0}, pRem[3] = {0,0,0}, pGpos[3] = {0,0,0};
+    float lpos[3] = {0,0,0}, cur[3] = {0,0,0}, rem[3] = {0,0,0}, gpos[3] = {0,0,0}, tf[3] = {0,0,0};
+    float lposMove = 0, curMove = 0, remMove = 0, gposMove = 0, tfMove = 0;
+    float pLpos[3] = {0,0,0}, pCur[3] = {0,0,0}, pRem[3] = {0,0,0}, pGpos[3] = {0,0,0}, pTf[3] = {0,0,0};
     bool  hasPrev = false;
     bool  hasMove = false;       // MoveComponent pointer was non-null
     bool  hasGpos = false;       // get_Position() probe was active
+    bool  hasTf = false;         // transform read-back was active
     uint32_t srcMask = 0;        // bitmask of hooks that drove this actor
     uint32_t samples = 0;
 };
@@ -93,6 +94,7 @@ static std::unordered_set<uint32_t>          g_oosSet;
 static std::mutex                            g_oosMtx;
 
 static void (*_TransformSetPosInj)(void* transform, float* v3) = nullptr;
+static void (*_TransformGetPosInj)(void* transform, float* outV3) = nullptr;
 static void (*_SetActorHp)(void* inst, int32_t curHp, int32_t totalHp) = nullptr;
 
 // Debug accessors (defined here, after g_oosMtx, for use by the menu Debug tab).
@@ -400,6 +402,27 @@ static inline void sync_oos_transform(void* inst, int src) {
     lpos[0]=writePos[0]; lpos[1]=writePos[1]; lpos[2]=writePos[2];
 
     _TransformSetPosInj(myTransform, writePos);
+
+    // Diagnostic: read myTransform.position straight back to verify the write
+    // actually took effect on the real render transform (vs being ignored or
+    // overwritten). If tfMove stays ~0 while gposMove grows, the visual mesh is
+    // driven by a DIFFERENT transform than 0x740.
+    if (g_mapDebug && _TransformGetPosInj) {
+        float tfp[3] = {0,0,0};
+        _TransformGetPosInj(myTransform, tfp);
+        std::lock_guard<std::mutex> lk(g_dbgMtx);
+        auto it = g_dbg.find(objID);
+        if (it != g_dbg.end()) {
+            DbgActor& a = it->second;
+            if (a.hasTf) { // accumulate only after we have a previous sample
+                float dx = tfp[0]-a.pTf[0], dz = tfp[2]-a.pTf[2];
+                a.tfMove += sqrtf(dx*dx + dz*dz);
+            }
+            a.pTf[0]=tfp[0]; a.pTf[1]=tfp[1]; a.pTf[2]=tfp[2];
+            a.tf[0]=tfp[0]; a.tf[1]=tfp[1]; a.tf[2]=tfp[2];
+            a.hasTf = true;
+        }
+    }
 }
 
 // =============================================================================
