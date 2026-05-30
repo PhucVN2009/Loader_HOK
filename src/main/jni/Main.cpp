@@ -548,6 +548,11 @@ void DrawMenu() {
         if (ImGui::Checkbox("Map Hack", &maphack)) {}
         ImGui::TextColored(ImColor(180, 230, 255),
             "Reveal all enemies on map and minimap");
+
+        ImGui::Spacing();
+        ImGui::Checkbox("Native Fog Reveal (libGameCore - experimental)", &g_nativeFow);
+        ImGui::TextColored(ImColor(255, 200, 0),
+            "Hooks libGameCore.so fog. If it crashes, turn this OFF.");
     }
     else if (activeFeature == 1) {
         ImGui::Columns(2, "deviceInfo", false);
@@ -917,6 +922,21 @@ void hack_injec() {
   // still iterates it every frame → Layer 4c fires → positions sync.
   mapAddr = Il2CppGetMethodOffset("Scripts.GameCore.dll", "Assets.Scripts.GameLogic", "ActorManager", "OnActorLeaveView", 2);
   if (mapAddr) DobbyHook(mapAddr, (void*)new_ActorMgrLeaveView, (void**)&_ActorMgrLeaveView);
+
+  // ── NATIVE libGameCore.so: Horizon fog – GameGridFow::IsSurfaceCellVisibleConsiderNeighbor ──
+  // Hook by static offset within libGameCore.so (memory-dump analysis). Wait for the
+  // library to be mapped, then hook base + 0x34839EC.
+  {
+    ProcMap gcMap = KittyMemory::getLibraryBaseMap("libGameCore.so");
+    for (int i = 0; i < 20 && !gcMap.isValid(); i++) { sleep(1); gcMap = KittyMemory::getLibraryBaseMap("libGameCore.so"); }
+    if (gcMap.isValid()) {
+      void* fn = (void*)((uintptr_t)gcMap.startAddress + 0x34839EC);
+      DobbyHook(fn, (void*)new_GC_IsCellVisible, (void**)&_GC_IsCellVisible);
+      LOGD("libGameCore.so base=%p, IsCellVisible hooked @ %p", gcMap.startAddress, fn);
+    } else {
+      LOGD("libGameCore.so not found - native fow hook skipped");
+    }
+  }
 
   // ── AnoSDK bypass: hook report-data functions so no reports are uploaded ──
   void* anogs = dlopen("libanogs.so", RTLD_NOLOAD);
