@@ -429,6 +429,16 @@ static inline void sync_oos_transform(void* inst, int src) {
 
     _TransformSetPosInj(myTransform, writePos);
 
+    // The VISIBLE model is a separate pooled GameObject (ActorLinker.ActorMesh,
+    // 0x6E0 → CPooledGameObjectScript.Trans, 0x58), NOT a child of myTransform —
+    // that is why moving myTransform alone left the mesh frozen (tf mv tracked
+    // gpos mv but the model stayed put). Move the mesh transform too.
+    void* meshScript = *(void**)((uint64_t)inst + 0x6E0); // ActorMesh
+    if (meshScript) {
+        void* meshTrans = *(void**)((uint64_t)meshScript + 0x58); // CPooledGameObjectScript.Trans
+        if (meshTrans) _TransformSetPosInj(meshTrans, writePos);
+    }
+
     // Diagnostic: read myTransform.position straight back to verify the write
     // actually took effect on the real render transform (vs being ignored or
     // overwritten). If tfMove stays ~0 while gposMove grows, the visual mesh is
