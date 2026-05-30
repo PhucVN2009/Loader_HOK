@@ -570,7 +570,8 @@ void DrawMenu() {
             ImGui::Checkbox("Box", &g_espBox);      ImGui::SameLine();
             ImGui::Checkbox("Line", &g_espLine);    ImGui::SameLine();
             ImGui::Checkbox("Health", &g_espHealth);
-            ImGui::Checkbox("Show allies too", &g_espAlly);
+            ImGui::Checkbox("Show allies too", &g_espAlly); ImGui::SameLine();
+            ImGui::Checkbox("Debug", &g_espDebug);
         }
 
         ImGui::Spacing();

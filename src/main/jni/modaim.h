@@ -72,11 +72,14 @@ static AimV3 hook_GetUseSkillDir(void* inst) {
     if (m_aimEnabled && inst) {
         void* slot = *(void**)((uint64_t)inst + 0x58);          // skillSlot
         int   st   = slot ? *(int*)((uint64_t)slot + 0x30) : 0; // SlotType (1/2/3)
+        g_aimDbgSlot = st; g_aimDbgFound = 0;
         bool  allow = (st==1 && m_aimSkill1) || (st==2 && m_aimSkill2) || (st==3 && m_aimSkill3);
         if (allow) {
             float host[3], dir[3];
-            if (aim_host_pos(host) && aim_best_target(host, dir))
+            if (aim_host_pos(host) && aim_best_target(host, dir)) {
+                g_aimDbgFound = 1;
                 return AimV3{ dir[0], dir[1], dir[2] };
+            }
         }
     }
     return _orig_GetUseSkillDir ? _orig_GetUseSkillDir(inst) : AimV3{0,0,1};

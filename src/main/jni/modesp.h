@@ -28,7 +28,12 @@ static bool g_espLine    = true;
 static bool g_espHealth  = true;
 static bool g_espName    = false;   // names need extra string reads; off by default
 static bool g_espAlly    = false;   // also draw teammates
+static bool g_espDebug   = false;   // diagnostic overlay
 static float g_espMaxDist = 200.0f;
+
+// aimbot diagnostics (written by modaim.h, read by the debug overlay here)
+static int  g_aimDbgSlot  = -1;   // last skill slot seen by the aimbot hook
+static int  g_aimDbgFound = -1;   // 1 = target found, 0 = none, -1 = hook not hit
 
 // ── Actor type / camp enums (from dump) ──
 enum { ACTOR_TYPE_HERO = 0 };       // CoreDef.ActorTypeDef: 0 = hero
@@ -133,6 +138,19 @@ static inline void DrawESP() {
         }
     }
 
+    int nEnemy = 0;
+    for (auto& a : snap) if (a.type==ACTOR_TYPE_HERO && g_hostCamp>=0 && a.camp!=g_hostCamp && a.hp>0) nEnemy++;
+
+    if (g_espDebug) {
+        char buf[256];
+        snprintf(buf, sizeof(buf),
+            "ESP DBG  scr=%.0fx%.0f  actors=%zu  hostPid=%u hostCamp=%d enemies=%d\n"
+            "aim: slot=%d found=%d  (S1/2/3=%d)",
+            scrW, scrH, snap.size(), g_hostPid, g_hostCamp, nEnemy,
+            g_aimDbgSlot, g_aimDbgFound, 0);
+        dl->AddText(ImVec2(scrW*0.35f, 8), IM_COL32(255,255,0,255), buf);
+    }
+
     for (auto& a : snap) {
         if (a.type != ACTOR_TYPE_HERO) continue;             // heroes only
         bool enemy = (g_hostCamp >= 0) && (a.camp != g_hostCamp);
@@ -146,6 +164,15 @@ static inline void DrawESP() {
         ImVec2 pf, ph;
         if (!esp_project(cam, feet, scrH, pf)) continue;
         if (!esp_project(cam, head, scrH, ph)) continue;
+
+        if (g_espDebug) {
+            // mark the raw feet projection so we can see if it lands on the actor
+            dl->AddCircleFilled(pf, 6.0f, IM_COL32(255,0,255,255));
+            char db[96]; snprintf(db, sizeof(db), "(%.0f,%.0f) w(%.0f,%.0f,%.0f)",
+                pf.x, pf.y, a.pos[0], a.pos[1], a.pos[2]);
+            dl->AddText(ImVec2(pf.x+8, pf.y), IM_COL32(255,255,255,255), db);
+        }
+
         if (pf.x < -100 || pf.x > scrW + 100) continue;
 
         float h = pf.y - ph.y; if (h < 6) h = 6;
