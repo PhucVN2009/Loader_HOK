@@ -23,6 +23,12 @@ enum { SRC_INTERP = 0, SRC_HOK, SRC_UPDLOGIC, SRC_FRAMESYNC, SRC_COUNT };
 static const char* kSrcName[SRC_COUNT] = { "Interp", "HOK_Interp", "UpdateLogic", "FrameSync" };
 static uint64_t g_srcCount[SRC_COUNT] = { 0, 0, 0, 0 };
 
+// NtfActorMovementData diagnostics: does the client receive movement packets for
+// actors that are currently out-of-sight? If g_ntfOOS keeps climbing while enemies
+// are OOS, the position data IS arriving and we can apply it directly.
+static uint64_t g_ntfTotal = 0;
+static uint64_t g_ntfOOS   = 0;
+
 // Per-OOS-actor tracking. *Move accumulates total XZ path length seen on each
 // source while the actor is out of sight — the source whose accumulator grows is
 // the live position. cur = MoveComponent.curPosition, rem = remotePosition,
@@ -103,6 +109,7 @@ static inline std::vector<DbgActor> maphack_dbg_snapshot() {
 static inline void maphack_dbg_clear() {
     { std::lock_guard<std::mutex> lk(g_dbgMtx); g_dbg.clear(); }
     for (int i = 0; i < SRC_COUNT; i++) g_srcCount[i] = 0;
+    g_ntfTotal = 0; g_ntfOOS = 0;
 }
 
 static inline void actor_cache(void* inst) {
@@ -197,6 +204,8 @@ static void new_NtfActorMovementData(void* dataPtr) {
     uint64_t nowNs = (uint64_t)ts.tv_sec * 1000000000ULL + (uint64_t)ts.tv_nsec;
 
     std::lock_guard<std::mutex> lk(g_oosMtx);
+    g_ntfTotal++;
+    if (g_oosSet.count(actorID) > 0) g_ntfOOS++;
     OOSData& d = g_oosMap[actorID];
     if (d.lastNs > 0) {
         float dx = pos[0]-d.pos[0], dz = pos[2]-d.pos[2];

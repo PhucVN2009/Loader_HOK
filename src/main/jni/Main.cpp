@@ -612,6 +612,9 @@ void DrawMenu() {
             kSrcName[SRC_UPDLOGIC],   (unsigned long long)g_srcCount[SRC_UPDLOGIC],
             kSrcName[SRC_FRAMESYNC],  (unsigned long long)g_srcCount[SRC_FRAMESYNC]);
         ImGui::Text("get_Position fn: %s", _ActorGetPosition ? "OK" : "NULL");
+        ImGui::TextColored(g_ntfOOS > 0 ? ImColor(80, 255, 120) : ImColor(255, 120, 120),
+            "MovementPackets: total=%llu  for-OOS=%llu  <-- KEY",
+            (unsigned long long)g_ntfTotal, (unsigned long long)g_ntfOOS);
 
         ImGui::Spacing();
         ImGui::TextWrapped(
