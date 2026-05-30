@@ -909,6 +909,12 @@ void hack_injec() {
   mapAddr = Il2CppGetMethodOffset("Scripts.GameCore.dll", "Assets.Scripts.GameLogic", "ActorLinker", "UpdateLogic", 1);
   if (mapAddr) DobbyHook(mapAddr, (void*)new_ActorUpdateLogic, (void**)&_ActorUpdateLogic);
 
+  // 4f: FrameSynchr.UpdateFrame() – self-driven sweep over cached OOS actors every
+  //     logic frame. Backstop for when the game stops calling the per-actor hooks
+  //     above on out-of-sight actors.
+  mapAddr = Il2CppGetMethodOffset("Scripts.Base.dll", "Assets.Scripts.Framework", "FrameSynchr", "UpdateFrame", 0);
+  if (mapAddr) DobbyHook(mapAddr, (void*)new_FrameUpdate, (void**)&_FrameUpdate);
+
   // Transform write helper: UnityEngine.Transform::set_position_Injected(ref Vector3)
   {
     void* tp = Il2CppGetMethodOffset("UnityEngine.CoreModule.dll", "UnityEngine", "Transform", "set_position_Injected", 1);

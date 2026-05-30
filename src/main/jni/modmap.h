@@ -5,8 +5,18 @@
 #include <unordered_set>
 #include <mutex>
 #include <time.h>
+#include <vector>
+#include <utility>
+#include <android/log.h>
 
 bool maphack = false;
+
+// Diagnostic toggle: when true, sync_oos_transform logs candidate position
+// sources for OOS actors to logcat (tag "HOKMAP").  Capture with:
+//   adb logcat -s HOKMAP:D
+// Used to determine which field actually advances while an actor is out of sight.
+static bool g_mapDebug = true;
+#define HOKMAP_LOG(...) do { if (g_mapDebug) __android_log_print(ANDROID_LOG_DEBUG, "HOKMAP", __VA_ARGS__); } while (0)
 
 // =============================================================================
 // Out-Of-Sight (OOS) actor tracking
@@ -64,6 +74,7 @@ static inline void oos_insert(void* inst) {
     std::lock_guard<std::mutex> lk(g_oosMtx);
     g_oosSet.insert(id);
     g_actorPtrMap[id] = inst;
+    HOKMAP_LOG("oos_insert id=%u  (oosSet size=%zu)", id, g_oosSet.size());
 }
 static inline void oos_remove(uint32_t id) {
     if (!id) return;
@@ -203,7 +214,7 @@ static inline bool read_logic_pos(void* inst, float out[3]) {
     return true;
 }
 
-static inline void sync_oos_transform(void* inst) {
+static inline void sync_oos_transform(void* inst, const char* src) {
     if (!maphack || !inst) return;
     uint32_t objID = *(uint32_t*)((uint64_t)inst + 0x4F4);
     if (!objID) return;
@@ -222,6 +233,22 @@ static inline void sync_oos_transform(void* inst) {
     if (!myTransform || !_TransformSetPosInj) return;
 
     float* lpos = (float*)((uint64_t)inst + 0x50C); // ActorLinker.position (packet/render)
+
+    // ── Diagnostic: log candidate position sources for OOS actors (throttled) ──
+    if (g_mapDebug) {
+        static uint32_t g_dbgCount = 0;
+        if ((g_dbgCount++ % 60) == 0) {
+            void* mc = *(void**)((uint64_t)inst + 0x468);          // MoveControl
+            float* cur = mc ? (float*)((uint64_t)mc + 0x28) : nullptr; // curPosition
+            float* rem = mc ? (float*)((uint64_t)mc + 0x34) : nullptr; // remotePosition
+            HOKMAP_LOG("src=%s id=%u mc=%p lpos=(%.1f,%.1f,%.1f) cur=(%.1f,%.1f,%.1f) rem=(%.1f,%.1f,%.1f)",
+                src, objID, mc,
+                lpos[0], lpos[1], lpos[2],
+                cur ? cur[0] : 0, cur ? cur[1] : 0, cur ? cur[2] : 0,
+                rem ? rem[0] : 0, rem ? rem[1] : 0, rem ? rem[2] : 0);
+        }
+    }
+
     float writePos[3];
 
     if (read_logic_pos(inst, writePos)) {
@@ -271,7 +298,7 @@ static inline void sync_oos_transform(void* inst) {
 static void (*_Interpolation)(void* inst) = nullptr;
 static void new_Interpolation(void* inst) {
     if (_Interpolation) _Interpolation(inst);
-    sync_oos_transform(inst);
+    sync_oos_transform(inst, "Interp");
 }
 
 // =============================================================================
@@ -282,7 +309,7 @@ static void new_Interpolation(void* inst) {
 static void (*_HOKOnInterpolation)(void* inst) = nullptr;
 static void new_HOKOnInterpolation(void* inst) {
     if (_HOKOnInterpolation) _HOKOnInterpolation(inst);
-    sync_oos_transform(inst);
+    sync_oos_transform(inst, "HOK_Interp");
 }
 
 // =============================================================================
@@ -296,7 +323,41 @@ static void new_HOKOnInterpolation(void* inst) {
 static void (*_ActorUpdateLogic)(void* inst, int32_t delta) = nullptr;
 static void new_ActorUpdateLogic(void* inst, int32_t delta) {
     if (_ActorUpdateLogic) _ActorUpdateLogic(inst, delta);
-    sync_oos_transform(inst);
+    sync_oos_transform(inst, "UpdateLogic");
+}
+
+// =============================================================================
+// LAYER 4f – FrameSynchr::UpdateFrame(): self-driven per-logic-frame sweep
+//
+// Reliability backstop.  In a frame-sync game UpdateFrame() runs every logic
+// frame on the logic thread; from here we iterate our cached OOS actors and call
+// sync ourselves.  This works even if the game never calls Interpolation()/
+// UpdateLogic() on OOS actors (e.g. they were dropped from ActorManager's update
+// lists), which is the most likely reason earlier per-actor hooks did nothing.
+// Runs on the same thread that frees actors, and each pointer is re-validated by
+// its ObjID before use, so it is safe against stale entries.
+// =============================================================================
+static void (*_FrameUpdate)(void* inst) = nullptr;
+static void drive_oos_sync() {
+    if (!maphack) return;
+    std::vector<std::pair<uint32_t,void*>> snapshot;
+    {
+        std::lock_guard<std::mutex> lk(g_oosMtx);
+        snapshot.reserve(g_oosSet.size());
+        for (uint32_t id : g_oosSet) {
+            auto it = g_actorPtrMap.find(id);
+            if (it != g_actorPtrMap.end() && it->second) snapshot.emplace_back(id, it->second);
+        }
+    }
+    for (auto& pr : snapshot) {
+        void* inst = pr.second;
+        if (*(uint32_t*)((uint64_t)inst + 0x4F4) != pr.first) continue; // stale/reused
+        sync_oos_transform(inst, "FrameSync");
+    }
+}
+static void new_FrameUpdate(void* inst) {
+    if (_FrameUpdate) _FrameUpdate(inst);
+    drive_oos_sync();
 }
 
 // =============================================================================
