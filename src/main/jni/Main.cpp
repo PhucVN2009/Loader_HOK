@@ -1019,10 +1019,14 @@ void hack_injec() {
     for (int i = 0; i < 30 && !gcMap.isValid(); i++) { sleep(1); gcMap = KittyMemory::getLibraryBaseMap("libGameCore.so"); }
     if (gcMap.isValid()) {
       uintptr_t fn = ResolveGCFuncByString("libGameCore.so", "IsSurfaceCellVisibleConsiderNeighbor");
-      const char* how = "auto";
-      if (!fn) { fn = (uintptr_t)gcMap.startAddress + 0x34839EC; how = "fallback-offset"; }
-      DobbyHook((void*)fn, (void*)new_GC_IsCellVisible, (void**)&_GC_IsCellVisible);
-      LOGD("libGameCore.so base=%p, IsCellVisible(%s) hooked @ %p", (void*)gcMap.startAddress, how, (void*)fn);
+      if (fn) {
+        DobbyHook((void*)fn, (void*)new_GC_IsCellVisible, (void**)&_GC_IsCellVisible);
+        LOGD("libGameCore.so base=%p, IsCellVisible(auto) hooked @ %p", (void*)gcMap.startAddress, (void*)fn);
+      } else {
+        // No stale-offset fallback: a hardcoded offset from an older build would be
+        // wrong after a game update and could crash. Skip instead (map hack off).
+        LOGD("libGameCore.so: IsCellVisible auto-resolve FAILED - map hack skipped (string not found)");
+      }
     } else {
       LOGD("libGameCore.so not found - native fow hook skipped");
     }
