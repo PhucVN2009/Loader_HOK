@@ -999,6 +999,11 @@ void hack_injec() {
   mapAddr = Il2CppGetMethodOffset("Scripts.GameCore.dll", "Assets.Scripts.GameLogic", "ActorLinker", "UpdateLogic", 1);
   if (mapAddr) DobbyHook(mapAddr, (void*)new_ActorUpdateLogic, (void**)&_ActorUpdateLogic);
 
+  // 4h: ActorLinker.LateUpdate() – latest per-frame point; write our position AFTER
+  //     the game's mesh-follow so it is not overwritten before render.
+  mapAddr = Il2CppGetMethodOffset("Scripts.GameCore.dll", "Assets.Scripts.GameLogic", "ActorLinker", "LateUpdate", 0);
+  if (mapAddr) DobbyHook(mapAddr, (void*)new_ActorLateUpdate, (void**)&_ActorLateUpdate);
+
   // 4f: FrameSynchr.UpdateFrame() – self-driven sweep over cached OOS actors every
   //     logic frame. Backstop for when the game stops calling the per-actor hooks
   //     above on out-of-sight actors.

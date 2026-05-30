@@ -501,6 +501,20 @@ static void new_ActorUpdateLogic(void* inst, int32_t delta) {
 }
 
 // =============================================================================
+// LAYER 4h – ActorLinker::LateUpdate(): latest per-frame point before render.
+// The mesh-follow / final transform placement runs in LateUpdate, AFTER the
+// Interpolation/UpdateLogic hooks, overwriting our earlier writes. Writing the
+// live position into myTransform + ActorMesh.Trans AFTER the original LateUpdate
+// makes our position the last word, so the visible model finally follows.
+// =============================================================================
+static void (*_ActorLateUpdate)(void* inst) = nullptr;
+static void new_ActorLateUpdate(void* inst) {
+    force_update_flags(inst);
+    if (_ActorLateUpdate) _ActorLateUpdate(inst);
+    sync_oos_transform(inst, SRC_INTERP);
+}
+
+// =============================================================================
 // Layer 4g – ActorLinkerUpdateFreqController::RefreshUpdateState(actor, delta)
 // The exact point where the LOD controller recomputes ShouldDoUpdate each frame.
 // Override its result to keep OOS actors fully updated, at the source.
