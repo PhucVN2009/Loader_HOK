@@ -903,6 +903,12 @@ void hack_injec() {
   mapAddr = Il2CppGetMethodOffset("Scripts.GameCore.dll", "Assets.Scripts.GameLogic", "ActorLinker", "HOK_OnInterpolation", 0);
   if (mapAddr) DobbyHook(mapAddr, (void*)new_HOKOnInterpolation, (void**)&_HOKOnInterpolation);
 
+  // 4e: UpdateLogic(int delta) – frame-sync logic step, runs for EVERY actor each
+  //     logic frame (this is where MoveComponent.curPosition is advanced). Syncing
+  //     here un-freezes OOS actors even when the render Interpolation path is culled.
+  mapAddr = Il2CppGetMethodOffset("Scripts.GameCore.dll", "Assets.Scripts.GameLogic", "ActorLinker", "UpdateLogic", 1);
+  if (mapAddr) DobbyHook(mapAddr, (void*)new_ActorUpdateLogic, (void**)&_ActorUpdateLogic);
+
   // Transform write helper: UnityEngine.Transform::set_position_Injected(ref Vector3)
   {
     void* tp = Il2CppGetMethodOffset("UnityEngine.CoreModule.dll", "UnityEngine", "Transform", "set_position_Injected", 1);

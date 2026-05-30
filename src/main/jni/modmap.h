@@ -172,34 +172,69 @@ static void new_NtfActorMoveState(uint32_t actorID, bool isMoving) {
 }
 
 // =============================================================================
-// Shared: sync OOS actor myTransform from ActorLinker.position or dead-reckon.
-// Called from BOTH Interpolation and HOK_OnInterpolation hooks.
+// LAYER 4 root-cause fix – live logic position from MoveComponent
+//
+//   ActorLinker.MoveControl    @ 0x468  → Assets.Scripts.GameLogic.MoveComponent*
+//   MoveComponent.curPosition  @ 0x028  → UnityEngine.Vector3 (x@0x28/y@0x2C/z@0x30)
+//
+// Why enemies froze when out-of-sight (the bug being fixed here):
+//   HOK is a deterministic frame-sync (lockstep) game: ActorLinker.UpdateLogic()
+//   steps EVERY actor's MoveComponent every logic frame, so MoveComponent
+//   .curPosition keeps advancing for heroes / monsters / soldiers even while the
+//   local player can't see them.
+//
+//   ActorLinker.position (0x50C) is a DIFFERENT field: it is written from server
+//   movement packets via ActorLinker.UpdatePosition(SGW.DisplayInfoData), and the
+//   server stops sending NtfActorMovementData for out-of-sight actors.  The old
+//   code synced myTransform from that packet field (or dead-reckoned from the last
+//   packet for ≤3 s), so once the packets stopped the actor animated in place but
+//   never moved — exactly the reported symptom.
+//
+//   Fix: for OOS actors prefer the always-live curPosition; fall back to the packet
+//   position / dead-reckoning only when MoveComponent is unavailable.
 // =============================================================================
+static inline bool read_logic_pos(void* inst, float out[3]) {
+    void* moveCtrl = *(void**)((uint64_t)inst + 0x468); // ActorLinker.MoveControl
+    if (!moveCtrl) return false;
+    float* cp = (float*)((uint64_t)moveCtrl + 0x28);    // MoveComponent.curPosition
+    if (cp[0] != cp[0] || cp[2] != cp[2]) return false; // reject NaN
+    if (cp[0] == 0.0f && cp[1] == 0.0f && cp[2] == 0.0f) return false; // uninitialised
+    out[0] = cp[0]; out[1] = cp[1]; out[2] = cp[2];
+    return true;
+}
+
 static inline void sync_oos_transform(void* inst) {
     if (!maphack || !inst) return;
     uint32_t objID = *(uint32_t*)((uint64_t)inst + 0x4F4);
     if (!objID) return;
+
     if (!g_oosMtx.try_lock()) return;
     bool isOOS = g_oosSet.count(objID) > 0;
-    if (!isOOS) { g_oosMtx.unlock(); return; }
+    bool haveCache = false; OOSData d{};
+    if (isOOS) {
+        auto it = g_oosMap.find(objID);
+        if (it != g_oosMap.end() && it->second.lastNs > 0) { d = it->second; haveCache = true; }
+    }
+    g_oosMtx.unlock();
+    if (!isOOS) return;
 
     void* myTransform = *(void**)((uint64_t)inst + 0x740);
-    if (!myTransform || !_TransformSetPosInj) { g_oosMtx.unlock(); return; }
+    if (!myTransform || !_TransformSetPosInj) return;
 
+    float* lpos = (float*)((uint64_t)inst + 0x50C); // ActorLinker.position (packet/render)
     float writePos[3];
-    float* lpos = (float*)((uint64_t)inst + 0x50C); // ActorLinker.position
 
-    auto it = g_oosMap.find(objID);
-    if (it != g_oosMap.end() && it->second.lastNs > 0) {
-        OOSData d = it->second;
-        g_oosMtx.unlock();
-
+    if (read_logic_pos(inst, writePos)) {
+        // PRIORITY 1 – live frame-sync logic position (advances even while OOS).
+        // Logic Y is sometimes 0 (height ignored by the planar sim) → keep render Y.
+        if (writePos[1] == 0.0f && lpos[1] != 0.0f) writePos[1] = lpos[1];
+    } else if (haveCache) {
         float ddx = lpos[0]-d.pos[0], ddz = lpos[2]-d.pos[2];
         if ((ddx*ddx + ddz*ddz) > 1.0f) {
-            // SGW advanced ActorLinker.position → use it directly
+            // PRIORITY 2 – server packet position advanced past the cache.
             writePos[0]=lpos[0]; writePos[1]=lpos[1]; writePos[2]=lpos[2];
         } else {
-            // Both frozen → dead-reckon from last cached packet
+            // PRIORITY 3 – dead-reckon from the last cached movement packet.
             writePos[0]=d.pos[0]; writePos[1]=d.pos[1]; writePos[2]=d.pos[2];
             if (d.isMoving && d.speed > 0.05f) {
                 float fm = sqrtf(d.fwd[0]*d.fwd[0]+d.fwd[1]*d.fwd[1]+d.fwd[2]*d.fwd[2]);
@@ -215,9 +250,16 @@ static inline void sync_oos_transform(void* inst) {
             }
         }
     } else {
-        g_oosMtx.unlock();
+        // PRIORITY 4 – nothing better than the (possibly frozen) render position.
         writePos[0]=lpos[0]; writePos[1]=lpos[1]; writePos[2]=lpos[2];
     }
+
+    // Mirror the live position back into ActorLinker.position (0x50C) so that the
+    // minimap blip (MinimapComponentNew) and any get_Position() callers move too,
+    // not just the world mesh.  Safe for OOS actors: the packet path overwrites
+    // this field again the moment the actor re-enters the local player's vision.
+    lpos[0]=writePos[0]; lpos[1]=writePos[1]; lpos[2]=writePos[2];
+
     _TransformSetPosInj(myTransform, writePos);
 }
 
@@ -240,6 +282,20 @@ static void new_Interpolation(void* inst) {
 static void (*_HOKOnInterpolation)(void* inst) = nullptr;
 static void new_HOKOnInterpolation(void* inst) {
     if (_HOKOnInterpolation) _HOKOnInterpolation(inst);
+    sync_oos_transform(inst);
+}
+
+// =============================================================================
+// LAYER 4e – ActorLinker::UpdateLogic(int delta): frame-sync logic path
+// Runs once per logic frame for EVERY actor (the deterministic lockstep step that
+// produces MoveComponent.curPosition).  Guarantees position sync happens even if
+// the render-side Interpolation()/HOK_OnInterpolation() are culled for OOS actors.
+// Because sync_oos_transform also mirrors the live position into ActorLinker
+// .position (0x50C), the game's own Interpolation() then smoothly follows it.
+// =============================================================================
+static void (*_ActorUpdateLogic)(void* inst, int32_t delta) = nullptr;
+static void new_ActorUpdateLogic(void* inst, int32_t delta) {
+    if (_ActorUpdateLogic) _ActorUpdateLogic(inst, delta);
     sync_oos_transform(inst);
 }
 
