@@ -318,15 +318,17 @@ static inline void sync_oos_transform(void* inst, int src) {
 
     float* lpos = (float*)((uint64_t)inst + 0x50C); // ActorLinker.position (packet/render)
 
+    // get_Position() reads the actor's live position from the native frame-sync
+    // core (proven: it advances for moving OOS actors while 0x50C stays frozen).
+    V3f gp{0,0,0}; bool gok = false;
+    if (_ActorGetPosition) { gp = _ActorGetPosition(inst); gok = true; }
+
     // ── Diagnostic: record candidate position sources for the menu Debug tab ──
     if (g_mapDebug) {
         if (src >= 0 && src < SRC_COUNT) g_srcCount[src]++;
         void* mc   = *(void**)((uint64_t)inst + 0x468);            // MoveControl
         float* cur = mc ? (float*)((uint64_t)mc + 0x28) : nullptr; // curPosition
         float* rem = mc ? (float*)((uint64_t)mc + 0x34) : nullptr; // remotePosition
-
-        V3f gp{0,0,0}; bool gok = false;
-        if (g_probeGetPos && _ActorGetPosition) { gp = _ActorGetPosition(inst); gok = true; }
 
         std::lock_guard<std::mutex> lk(g_dbgMtx);
         DbgActor& a = g_dbg[objID];
@@ -348,18 +350,30 @@ static inline void sync_oos_transform(void* inst, int src) {
     }
 
     float writePos[3];
+    bool got = false;
 
-    if (read_logic_pos(inst, writePos)) {
-        // PRIORITY 1 – live frame-sync logic position (advances even while OOS).
+    // PRIORITY 1 – ActorLinker.get_Position(): empirically LIVE for OOS actors.
+    // The debug 'gpos' column keeps growing for moving units (minions/monsters)
+    // while the raw position field (0x50C) stays frozen — so this getter reads the
+    // actor's current position from the native frame-sync core on each call.
+    if (gok && gp.x == gp.x && gp.z == gp.z && !(gp.x == 0.0f && gp.y == 0.0f && gp.z == 0.0f)) {
+        writePos[0] = gp.x; writePos[1] = gp.y; writePos[2] = gp.z;
+        got = true;
+    }
+
+    if (got) {
+        // live position already in writePos
+    } else if (read_logic_pos(inst, writePos)) {
+        // PRIORITY 2 – live frame-sync logic position (advances even while OOS).
         // Logic Y is sometimes 0 (height ignored by the planar sim) → keep render Y.
         if (writePos[1] == 0.0f && lpos[1] != 0.0f) writePos[1] = lpos[1];
     } else if (haveCache) {
         float ddx = lpos[0]-d.pos[0], ddz = lpos[2]-d.pos[2];
         if ((ddx*ddx + ddz*ddz) > 1.0f) {
-            // PRIORITY 2 – server packet position advanced past the cache.
+            // PRIORITY 3 – server packet position advanced past the cache.
             writePos[0]=lpos[0]; writePos[1]=lpos[1]; writePos[2]=lpos[2];
         } else {
-            // PRIORITY 3 – dead-reckon from the last cached movement packet.
+            // PRIORITY 4 – dead-reckon from the last cached movement packet.
             writePos[0]=d.pos[0]; writePos[1]=d.pos[1]; writePos[2]=d.pos[2];
             if (d.isMoving && d.speed > 0.05f) {
                 float fm = sqrtf(d.fwd[0]*d.fwd[0]+d.fwd[1]*d.fwd[1]+d.fwd[2]*d.fwd[2]);
@@ -375,7 +389,7 @@ static inline void sync_oos_transform(void* inst, int src) {
             }
         }
     } else {
-        // PRIORITY 4 – nothing better than the (possibly frozen) render position.
+        // PRIORITY 5 – nothing better than the (possibly frozen) render position.
         writePos[0]=lpos[0]; writePos[1]=lpos[1]; writePos[2]=lpos[2];
     }
 
