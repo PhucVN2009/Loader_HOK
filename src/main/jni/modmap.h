@@ -54,6 +54,11 @@ struct V3f { float x, y, z; };
 static V3f  (*_ActorGetPosition)(void* inst) = nullptr; // ActorLinker.get_Position()
 static bool g_probeGetPos = false;  // measure get_Position() movement (default off: ABI probe)
 
+// "Boot Camp mode": never let an actor be reported out-of-vision so the game keeps
+// updating/moving it natively (in Boot Camp the local player has full vision, so
+// actors never freeze). Toggleable because it changes a by-value-struct ABI hook.
+static bool g_forceVisible = false;
+
 // =============================================================================
 // Out-Of-Sight (OOS) actor tracking
 //
@@ -154,6 +159,27 @@ static bool (*_FowGetEnableRender)() = nullptr;
 static bool new_FowGetEnableRender() {
     if (maphack) return false;
     return _FowGetEnableRender ? _FowGetEnableRender() : false;
+}
+
+// =============================================================================
+// LAYER 0 – NtfSetActorVisible: keep every actor "visible" (Boot Camp behaviour)
+//
+// SGC.NtfSetActorVisible(objId, logicVisible, pos, dir, rot, extra) is how the
+// simulation tells the client an actor entered/left vision. Forcing logicVisible
+// true means no actor ever enters the out-of-vision state, so the game's own
+// systems keep simulating/rendering/moving it — exactly what Boot Camp does.
+// Struct args are passed by value (Vector3/Quaternion are float HFAs, VInt3 is a
+// 12-byte int aggregate); declared explicitly so the pass-through stays ABI-correct.
+// =============================================================================
+struct MapVec3 { float x, y, z; };
+struct MapVInt3 { int32_t x, y, z; };
+struct MapQuat { float x, y, z, w; };
+static void (*_NtfSetActorVisible)(uint32_t objId, bool logicVisible,
+                                   MapVec3 pos, MapVInt3 dir, MapQuat rot, void* extra) = nullptr;
+static void new_NtfSetActorVisible(uint32_t objId, bool logicVisible,
+                                   MapVec3 pos, MapVInt3 dir, MapQuat rot, void* extra) {
+    if (maphack && g_forceVisible) logicVisible = true;
+    if (_NtfSetActorVisible) _NtfSetActorVisible(objId, logicVisible, pos, dir, rot, extra);
 }
 
 // =============================================================================

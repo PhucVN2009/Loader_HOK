@@ -603,6 +603,10 @@ void DrawMenu() {
 
         // Probe ActorLinker.get_Position() movement (adds 'gpos' column).
         ImGui::Checkbox("Probe get_Position()  [adds 'gpos' column]", &g_probeGetPos);
+        // Boot Camp mode: keep every actor 'visible' so the game updates it natively.
+        ImGui::Checkbox("Boot Camp mode: force all actors visible (NtfSetActorVisible)", &g_forceVisible);
+        if (g_forceVisible)
+            ImGui::TextColored(ImColor(255, 230, 0), "Active: enemies should now move like in Boot Camp.");
 
         ImGui::Separator();
         ImGui::Text("OOS actors tracked: %zu", maphack_oos_count());
@@ -931,6 +935,11 @@ void hack_injec() {
 
   // ── Map Hack hooks (FogOfWar – Scripts.GameCore.dll, global namespace) ────
   void* mapAddr;
+
+  // Layer 0: SGC.NtfSetActorVisible – force logicVisible=true (Boot Camp behaviour)
+  mapAddr = Il2CppGetMethodOffset("Scripts.GameCore.dll", "", "SGC", "NtfSetActorVisible", 6);
+  if (mapAddr) DobbyHook(mapAddr, (void*)new_NtfSetActorVisible, (void**)&_NtfSetActorVisible);
+
   mapAddr = Il2CppGetMethodOffset("Scripts.GameCore.dll", "", "FogOfWar", "IsEnable", 0);
   if (mapAddr) DobbyHook(mapAddr, (void*)new_FowIsEnable, (void**)&_FowIsEnable);
 
