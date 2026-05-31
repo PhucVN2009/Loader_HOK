@@ -6,7 +6,19 @@
 #include <mutex>
 #include <time.h>
 
-bool maphack = false;
+// Two independent map-hack channels:
+//   maphack_il2cpp – managed il2cpp hooks (FogOfWar flags, actor SetVisible,
+//                    CheckVisible, OOS position/HP sync, leave-view retention).
+//                    Reveals ENEMY units through fog, BUT mutates the lockstep
+//                    simulation state → diverges from the server's deterministic
+//                    frame → local_mismatch_count rises → match invalidated
+//                    ("trận đấu ảo") after the engine's grace window (~2 min).
+//   maphack_gc     – native libGameCore fog-grid visibility only
+//                    (IsSurfaceCellVisibleConsiderNeighbor). Affects the
+//                    client-side vision/minimap rendering, NOT the deterministic
+//                    simulation checksum → does NOT desync.
+bool maphack_il2cpp = false;
+bool maphack_gc     = false;
 
 // =============================================================================
 // Out-Of-Sight (OOS) actor tracking
@@ -76,17 +88,17 @@ static inline void oos_remove(uint32_t id) {
 // =============================================================================
 static bool (*_FowIsEnable)() = nullptr;
 static bool new_FowIsEnable() {
-    if (maphack) return false;
+    if (maphack_il2cpp) return false;
     return _FowIsEnable ? _FowIsEnable() : false;
 }
 static bool (*_FowGetEnable)() = nullptr;
 static bool new_FowGetEnable() {
-    if (maphack) return false;
+    if (maphack_il2cpp) return false;
     return _FowGetEnable ? _FowGetEnable() : false;
 }
 static bool (*_FowGetEnableRender)() = nullptr;
 static bool new_FowGetEnableRender() {
-    if (maphack) return false;
+    if (maphack_il2cpp) return false;
     return _FowGetEnableRender ? _FowGetEnableRender() : false;
 }
 
@@ -95,7 +107,7 @@ static bool new_FowGetEnableRender() {
 // =============================================================================
 static void (*_ActorSetVisible)(void* inst, bool logicVis, bool meshVis) = nullptr;
 static void new_ActorSetVisible(void* inst, bool logicVis, bool meshVis) {
-    if (maphack) {
+    if (maphack_il2cpp) {
         actor_cache(inst);
         if (!logicVis) oos_insert(inst);
         else if (inst) oos_remove(*(uint32_t*)((uint64_t)inst + 0x4F4));
@@ -105,7 +117,7 @@ static void new_ActorSetVisible(void* inst, bool logicVis, bool meshVis) {
 }
 static void (*_ActorForceSetVisible)(void* inst, bool logicVis, bool meshVis) = nullptr;
 static void new_ActorForceSetVisible(void* inst, bool logicVis, bool meshVis) {
-    if (maphack) {
+    if (maphack_il2cpp) {
         actor_cache(inst);
         if (!logicVis) oos_insert(inst);
         else if (inst) oos_remove(*(uint32_t*)((uint64_t)inst + 0x4F4));
@@ -119,7 +131,7 @@ static void new_ActorForceSetVisible(void* inst, bool logicVis, bool meshVis) {
 // =============================================================================
 static bool (*_CheckVisible)(void* attacker, void* target, int32_t flag) = nullptr;
 static bool new_CheckVisible(void* attacker, void* target, int32_t flag) {
-    if (maphack) return true;
+    if (maphack_il2cpp) return true;
     return _CheckVisible ? _CheckVisible(attacker, target, flag) : false;
 }
 
@@ -129,7 +141,7 @@ static bool new_CheckVisible(void* attacker, void* target, int32_t flag) {
 static void (*_NtfActorMovementData)(void* dataPtr) = nullptr;
 static void new_NtfActorMovementData(void* dataPtr) {
     if (_NtfActorMovementData) _NtfActorMovementData(dataPtr);
-    if (!maphack || !dataPtr) return;
+    if (!maphack_il2cpp || !dataPtr) return;
 
     uint32_t actorID = *(uint32_t*)((uint64_t)dataPtr + 0x08);
     if (!actorID) return;
@@ -165,7 +177,7 @@ static void new_NtfActorMovementData(void* dataPtr) {
 static void (*_NtfActorMoveState)(uint32_t actorID, bool isMoving) = nullptr;
 static void new_NtfActorMoveState(uint32_t actorID, bool isMoving) {
     if (_NtfActorMoveState) _NtfActorMoveState(actorID, isMoving);
-    if (!maphack) return;
+    if (!maphack_il2cpp) return;
     std::lock_guard<std::mutex> lk(g_oosMtx);
     auto it = g_oosMap.find(actorID);
     if (it != g_oosMap.end()) it->second.isMoving = isMoving;
@@ -176,7 +188,7 @@ static void new_NtfActorMoveState(uint32_t actorID, bool isMoving) {
 // Called from BOTH Interpolation and HOK_OnInterpolation hooks.
 // =============================================================================
 static inline void sync_oos_transform(void* inst) {
-    if (!maphack || !inst) return;
+    if (!maphack_il2cpp || !inst) return;
     uint32_t objID = *(uint32_t*)((uint64_t)inst + 0x4F4);
     if (!objID) return;
     if (!g_oosMtx.try_lock()) return;
@@ -252,7 +264,7 @@ static void new_HOKOnInterpolation(void* inst) {
 static void (*_OnActorCurHpChange)(uint32_t objID, int32_t curHp, int32_t totalHp) = nullptr;
 static void new_OnActorCurHpChange(uint32_t objID, int32_t curHp, int32_t totalHp) {
     if (_OnActorCurHpChange) _OnActorCurHpChange(objID, curHp, totalHp);
-    if (!maphack) return;
+    if (!maphack_il2cpp) return;
     if (!g_oosMtx.try_lock()) return;
     bool isOOS = g_oosSet.count(objID) > 0;
     void* actor = nullptr;
@@ -271,9 +283,9 @@ static void new_OnActorCurHpChange(uint32_t objID, int32_t curHp, int32_t totalH
 // =============================================================================
 static void (*_OnActorLeaveViewUnregEvt)(uint32_t actorID) = nullptr;
 static void new_OnActorLeaveViewUnregEvt(uint32_t actorID) {
-    if (!maphack)
+    if (!maphack_il2cpp)
         if (_OnActorLeaveViewUnregEvt) _OnActorLeaveViewUnregEvt(actorID);
-    // skipped when maphack: keeps all C# event subscriptions alive
+    // skipped when maphack_il2cpp: keeps all C# event subscriptions alive
 }
 
 // =============================================================================
@@ -299,7 +311,7 @@ static void new_OnActorLeaveViewUnregEvt(uint32_t actorID) {
 // =============================================================================
 static void (*_ActorMgrLeaveView)(void* inst, uint32_t actorID, uint32_t objSeq) = nullptr;
 static void new_ActorMgrLeaveView(void* inst, uint32_t actorID, uint32_t objSeq) {
-    if (maphack) return; // skip — actor stays in ActorManager render/logic lists
+    if (maphack_il2cpp) return; // skip — actor stays in ActorManager render/logic lists
     if (_ActorMgrLeaveView) _ActorMgrLeaveView(inst, actorID, objSeq);
 }
 
@@ -316,11 +328,11 @@ static void new_ActorMgrLeaveView(void* inst, uint32_t actorID, uint32_t objSeq)
 // Forcing it to report the cell as visible reveals the fogged map.
 //
 // NOTE: offset is specific to this exact libGameCore.so build. Driven by the
-// single "Map Hack" toggle (maphack).
+// single "Map Hack" toggle (maphack_il2cpp).
 // =============================================================================
 static bool (*_GC_IsCellVisible)(void* thiz, void* a1, int a2, int a3) = nullptr;
 static bool new_GC_IsCellVisible(void* thiz, void* a1, int a2, int a3) {
-    if (maphack) return true; // every surface cell "visible" → no fog
+    if (maphack_gc) return true; // every surface cell "visible" → no fog
     return _GC_IsCellVisible ? _GC_IsCellVisible(thiz, a1, a2, a3) : false;
 }
 

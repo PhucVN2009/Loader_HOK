@@ -504,8 +504,20 @@ void DrawMenu() {
 
     if (activeFeature == 0) {
 
-        // ── Map Hack ──────────────────────────────────────────────────────
-        ImGui::Checkbox("Map Hack", &maphack);
+        // ── Map Hack (split into 2 independent channels) ───────────────────
+        ImGui::TextColored(ImColor(0, 255, 255), ICON_FA_MAP " Map Hack");
+        ImGui::Spacing();
+
+        ImGui::Checkbox("Map Hack - GameCore (an toan)", &maphack_gc);
+        ImGui::TextColored(ImColor(150, 220, 150),
+            "  Mo fog tren minimap/dia hinh. KHONG desync.");
+
+        ImGui::Spacing();
+
+        ImGui::Checkbox("Map Hack - il2cpp (hien dich)", &maphack_il2cpp);
+        ImGui::TextColored(ImColor(255, 170, 120),
+            "  Hien vi tri/mau dich qua fog. CO THE bi 'tran dau ao'\n"
+            "  sau ~2p do lech frame-sync voi server.");
 
         ImGui::Spacing();
         ImGui::Separator();
