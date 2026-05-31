@@ -568,12 +568,39 @@ void DrawMenu() {
         ImGui::Spacing();
 
         ImGui::Checkbox("Bat Anti-Ban", &g_antiBan);
-        ImGui::Checkbox("ESP: Duong ke", &g_espLine);
-        ImGui::Checkbox("ESP: Hop", &g_espBox);
-        ImGui::Checkbox("ESP: Thanh mau", &g_espHealth);
-        ImGui::Checkbox("ESP: Khoang cach", &g_espDistance);
-        ImGui::Checkbox("ESP: Linh (Minion)", &g_espMinion);
-        ImGui::Checkbox("ESP: Quai rung (Monster)", &g_espMonster);
+        ImGui::Separator();
+
+        ImGui::Checkbox("Enable ESP", &ESP.Enable);
+        ImGui::Columns(2, "esp_cols", false);
+        ImGui::Checkbox("ESP Line",      &ESP.Line);        ImGui::NextColumn();
+        ImGui::Checkbox("ESP Box",       &ESP.Box);         ImGui::NextColumn();
+        ImGui::Checkbox("ESP Cooldown",  &ESP.Cooldown);    ImGui::NextColumn();
+        ImGui::Checkbox("ESP HP",        &ESP.HP);          ImGui::NextColumn();
+        ImGui::Checkbox("ESP Map",       &ESP.Map);         ImGui::NextColumn();
+        ImGui::Checkbox("Visible Check", &ESP.VisibleCheck);ImGui::NextColumn();
+        ImGui::Checkbox("Show Player Info", &ESP.PlayerInfo);ImGui::NextColumn();
+        ImGui::Checkbox("ESP Alert",     &ESP.Alert);       ImGui::NextColumn();
+        ImGui::Checkbox("Show Hero Image", &ESP.HeroImage); ImGui::NextColumn();
+        ImGui::Checkbox("ESP Minions",   &ESP.Minions);     ImGui::NextColumn();
+        ImGui::Checkbox("ESP Ultimate",  &ESP.Ultimate);    ImGui::NextColumn();
+        ImGui::Columns(1);
+
+        if (ESP.Map) {
+            ImGui::Spacing();
+            ImGui::Text("Map mode:");
+            ImGui::SameLine(); ImGui::RadioButton("Radar", &ESP.MapMode, 0);
+            ImGui::SameLine(); ImGui::RadioButton("Minimap overlay", &ESP.MapMode, 1);
+            if (ESP.MapMode == 0) {
+                ImGui::SliderFloat("Radar size",  &ESP.RadarSize,  80.0f, 320.0f);
+                ImGui::SliderFloat("Radar scale", &ESP.RadarScale, 0.5f,  6.0f);
+            } else {
+                ImGui::SliderFloat("Map X",    &ESP.MmX,       0.0f, 800.0f);
+                ImGui::SliderFloat("Map Y",    &ESP.MmY,       0.0f, 800.0f);
+                ImGui::SliderFloat("Map size", &ESP.MmSize,   80.0f, 600.0f);
+                ImGui::SliderFloat("World min",&ESP.WorldMin,-200.0f, 200.0f);
+                ImGui::SliderFloat("World max",&ESP.WorldMax,  0.0f, 400.0f);
+            }
+        }
     }
     else if (activeFeature == 1) {
         ImGui::Columns(2, "deviceInfo", false);
