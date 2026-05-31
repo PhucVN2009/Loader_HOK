@@ -415,33 +415,38 @@ static inline void DrawAimbot(int screenW, int screenH) {
     void* cam = aim_CamGetMain ? aim_CamGetMain(nullptr) : nullptr;
     uintptr_t host = g_aimHostActor.load();
 
-    // ---- aim-range circle around the host hero ----
-    if (m_aimEnabled && m_aimDrawRange && cam && host) {
-        AimVec3 myPos;
-        if (aimReadPos(host, myPos)) {
-            ImVec2 center;
-            if (AimW2S(cam, myPos, W, H, center)) {
-                // project a point at world-range to derive a screen radius
-                AimVec3 edge = {myPos.x + (float)m_aimDistance, myPos.y, myPos.z};
-                ImVec2 edgeS;
-                float radius = 90.0f;
-                if (AimW2S(cam, edge, W, H, edgeS)) {
-                    float dx = edgeS.x - center.x, dy = edgeS.y - center.y;
-                    radius = sqrtf(dx*dx + dy*dy);
-                    if (radius < 20.0f) radius = 20.0f;
-                    if (radius > W)     radius = W;
-                }
-                dl->AddCircle(center, radius, IM_COL32(0, 220, 255, 160), 64, 2.0f);
-            }
+    AimVec3 myPos; bool haveMy = (cam && host && aimReadPos(host, myPos));
+
+    // ---- aim-range circle ON THE GROUND around the host hero ----
+    // Sample points of a world-space circle at the hero's feet (constant Y) and
+    // project each one; drawing a flat 2D screen circle would bend up into the
+    // sky because of the camera tilt.
+    if (m_aimEnabled && m_aimDrawRange && haveMy) {
+        const int   N = 48;
+        const float R = (float)m_aimDistance;
+        ImVec2 pts[N];
+        bool   ok[N];
+        for (int i = 0; i < N; ++i) {
+            float ang = (float)i / (float)N * 6.2831853f;
+            AimVec3 p = { myPos.x + R * cosf(ang), myPos.y, myPos.z + R * sinf(ang) };
+            ok[i] = AimW2S(cam, p, W, H, pts[i]);
+        }
+        for (int i = 0; i < N; ++i) {
+            int j = (i + 1) % N;
+            if (ok[i] && ok[j])
+                dl->AddLine(pts[i], pts[j], IM_COL32(0, 220, 255, 170), 2.0f);
         }
     }
 
-    // ---- line from host to the current target ----
-    if (m_aimEnabled && m_aimDrawLine && cam && host && g_aimHasTarget.load()) {
-        AimVec3 myPos, tPos = g_aimTargetPos;
-        if (aimReadPos(host, myPos)) {
+    // ---- line from host to the current target (live position each frame) ----
+    // Re-select + re-read the target every frame so the line tracks the enemy
+    // as it moves instead of freezing at the last skill-press position.
+    if (m_aimEnabled && m_aimDrawLine && haveMy) {
+        AimVec3 ePos;
+        uintptr_t tgt = AimSelectTarget(myPos, g_aimHostCamp, ePos);
+        if (tgt) {
             ImVec2 a, b;
-            if (AimW2S(cam, myPos, W, H, a) && AimW2S(cam, tPos, W, H, b)) {
+            if (AimW2S(cam, myPos, W, H, a) && AimW2S(cam, ePos, W, H, b)) {
                 dl->AddLine(a, b, IM_COL32(255, 40, 40, 220), 2.0f);
                 dl->AddCircleFilled(b, 6.0f, IM_COL32(255, 40, 40, 220));
             }

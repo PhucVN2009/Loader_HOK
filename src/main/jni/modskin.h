@@ -78,13 +78,14 @@ static void hook_unpack(CSProtocol::COMDT_HERO_COMMON_INFO* instance) {
     if (instance == nullptr) return;
     if (CSProtocol::saveData::skinId == 0) return;
 
-    bool match = (CSProtocol::saveData::heroId == 0) ||
-                 (instance->getdwHeroID() == CSProtocol::saveData::heroId);
+    // FIX "ai cũng có skin": chỉ rewrite cho ĐÚNG hero bạn chọn.
+    // Bỏ hẳn case heroId==0 (apply-all) vì COMDT_HERO_COMMON_INFO của người
+    // chơi khác cũng được unpack khi hiển thị (màn VS) → skin lây sang họ.
+    if (CSProtocol::saveData::heroId == 0) return;
+    if (instance->getdwHeroID() != CSProtocol::saveData::heroId) return;
 
-    if (match) {
-        CSProtocol::saveData::arrayUnpackSkin.emplace_back(instance, instance->getwSkinID());
-        instance->setwSkinID(CSProtocol::saveData::skinId);
-    }
+    CSProtocol::saveData::arrayUnpackSkin.emplace_back(instance, instance->getwSkinID());
+    instance->setwSkinID(CSProtocol::saveData::skinId);
 }
 
 // COMDT_HERO_COMMON_INFO::unpack(TdrReadBuf& srcBuf, uint32 cutVer)
@@ -131,10 +132,13 @@ static bool new_IsHaveHeroSkin(void* instance, uint32_t heroId, uint32_t skinId,
 // ---------------------------------------------------------------------------
 static uint32_t (*_GetHeroWearSkinId)(void* instance, uint32_t heroID);
 static uint32_t new_GetHeroWearSkinId(void* instance, uint32_t heroID) {
-    if (unlockskin && CSProtocol::saveData::enable && CSProtocol::saveData::skinId != 0) {
-        uint32_t target = CSProtocol::saveData::heroId;
-        if (target == 0 || target == heroID)
-            return CSProtocol::saveData::skinId;
+    // Chỉ trả skin mod cho ĐÚNG hero bạn chọn (heroId != 0 và khớp heroID).
+    // Bỏ case heroId==0 vì màn VS gọi hàm này cho hero của MỌI người chơi →
+    // trả skin mod cho tất cả. Yêu cầu nhập đúng Hero ID của bạn.
+    if (unlockskin && CSProtocol::saveData::enable && CSProtocol::saveData::skinId != 0
+        && CSProtocol::saveData::heroId != 0
+        && CSProtocol::saveData::heroId == heroID) {
+        return CSProtocol::saveData::skinId;
     }
     if (!_GetHeroWearSkinId) return 0;
     return _GetHeroWearSkinId(instance, heroID);
