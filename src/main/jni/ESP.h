@@ -391,7 +391,6 @@ static inline void DrawESP(int screenW, int screenH) {
         bool isEnemyHero = (isHero && camp != hostCamp);
         bool isFriendCreep = (isMonster && camp == hostCamp);
         bool isEnemyCreep  = (isMonster && camp != hostCamp && camp != ESP_CAMP_MID);
-        bool isJungle      = (isMonster && camp == ESP_CAMP_MID);
 
         if (isLocal)       continue;
         if (isFriendCreep) continue;
