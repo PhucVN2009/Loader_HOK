@@ -50,7 +50,7 @@
 #include "modskin.h"
 #include "modmap.h"
 #include "modcam.h"
-#include "ESP.h"
+#include "Aimbot.h"
 #include "imgui/Icon.h"
 #include "imgui/Iconcpp.h"
 #include "AutoUpdate/IL2CppSDKGenerator/Il2Cpp.h"
@@ -559,47 +559,29 @@ void DrawMenu() {
             ImGui::SliderInt("Zoom", &m_CameraZoomValue, 0, 100);
         }
 
-        // ── Cài đặt ESP ─────────────────────────────────────────────────────
+        // ── Anti-Ban ────────────────────────────────────────────────────────
         ImGui::Spacing();
         ImGui::Separator();
-        ImGui::Spacing();
-
-        ImGui::TextColored(ImColor(0, 255, 255), ICON_FA_EYE " Cai dat ESP");
         ImGui::Spacing();
 
         ImGui::Checkbox("Bat Anti-Ban", &g_antiBan);
+
+        // ── ★ AIMBOT ★ ──────────────────────────────────────────────────────
+        ImGui::Spacing();
         ImGui::Separator();
+        ImGui::Spacing();
 
-        ImGui::Checkbox("Enable ESP", &ESP.Enable);
-        ImGui::Columns(2, "esp_cols", false);
-        ImGui::Checkbox("ESP Line",      &ESP.Line);        ImGui::NextColumn();
-        ImGui::Checkbox("ESP Box",       &ESP.Box);         ImGui::NextColumn();
-        ImGui::Checkbox("ESP Cooldown",  &ESP.Cooldown);    ImGui::NextColumn();
-        ImGui::Checkbox("ESP HP",        &ESP.HP);          ImGui::NextColumn();
-        ImGui::Checkbox("ESP Map",       &ESP.Map);         ImGui::NextColumn();
-        ImGui::Checkbox("Visible Check", &ESP.VisibleCheck);ImGui::NextColumn();
-        ImGui::Checkbox("Show Player Info", &ESP.PlayerInfo);ImGui::NextColumn();
-        ImGui::Checkbox("ESP Alert",     &ESP.Alert);       ImGui::NextColumn();
-        ImGui::Checkbox("Show Hero Image", &ESP.HeroImage); ImGui::NextColumn();
-        ImGui::Checkbox("ESP Minions",   &ESP.Minions);     ImGui::NextColumn();
-        ImGui::Checkbox("ESP Ultimate",  &ESP.Ultimate);    ImGui::NextColumn();
-        ImGui::Columns(1);
+        ImGui::TextColored(ImColor(0, 255, 255), ICON_FA_CROSSHAIRS " AIMBOT");
+        ImGui::Spacing();
 
-        if (ESP.Map) {
-            ImGui::Spacing();
-            ImGui::Text("Map mode:");
-            ImGui::SameLine(); ImGui::RadioButton("Radar", &ESP.MapMode, 0);
-            ImGui::SameLine(); ImGui::RadioButton("Minimap overlay", &ESP.MapMode, 1);
-            if (ESP.MapMode == 0) {
-                ImGui::SliderFloat("Radar size",  &ESP.RadarSize,  80.0f, 320.0f);
-                ImGui::SliderFloat("Radar scale", &ESP.RadarScale, 0.5f,  6.0f);
-            } else {
-                ImGui::SliderFloat("Map X",    &ESP.MmX,       0.0f, 800.0f);
-                ImGui::SliderFloat("Map Y",    &ESP.MmY,       0.0f, 800.0f);
-                ImGui::SliderFloat("Map size", &ESP.MmSize,   80.0f, 600.0f);
-                ImGui::SliderFloat("World min",&ESP.WorldMin,-200.0f, 200.0f);
-                ImGui::SliderFloat("World max",&ESP.WorldMax,  0.0f, 400.0f);
-            }
+        ImGui::Checkbox("Aimbot (Bat/Tat)", &m_aimEnabled);
+        if (m_aimEnabled) {
+            ImGui::SliderInt("Aim Distance (10-150)", &m_aimDistance, 10, 150);
+            ImGui::SliderInt("Aim Smooth (1-50)",     &m_aimSmooth,    1,  50);
+            ImGui::Checkbox("Aim Skill 1", &m_aimSkill1); ImGui::SameLine();
+            ImGui::Checkbox("Aim Skill 2", &m_aimSkill2); ImGui::SameLine();
+            ImGui::Checkbox("Aim Skill 3", &m_aimSkill3);
+            ImGui::Checkbox("Aimbot Debug Overlay", &m_aimDebug);
         }
     }
     else if (activeFeature == 1) {
@@ -697,7 +679,7 @@ inline EGLBoolean hook_eglSwapBuffers(EGLDisplay dpy, EGLSurface surface) {
 
   DrawLogo();
   DrawMenu();
-  if (ImGuiOK) DrawESP(g_GlWidth, g_GlHeight);
+  if (ImGuiOK) { AimbotTick(); DrawAimbotDebug(); }
 
   ImGui::End();
   ImGui::Render();
@@ -1060,8 +1042,8 @@ void hack_injec() {
     dlclose(anogs);
   }
 
-  // ── ESP: hook ActorLinker spawn / late-update + resolve camera & getters ──
-  EspInstallHook();
+  // ── Aimbot: hook GetUseSkillDirection + actor tracking, resolve getters ──
+  AimbotInstallHook();
 
   ImGuiOK = true;
 }

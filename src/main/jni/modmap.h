@@ -8,11 +8,6 @@
 
 bool maphack = false;
 
-// Defined in ESP.h – true while any ESP feature is on. When ESP is active we
-// also want the native fog-of-war cell test to report "visible" so out-of-sight
-// actors keep updating their position for the overlay.
-extern bool g_espActive;
-
 // =============================================================================
 // Out-Of-Sight (OOS) actor tracking
 //
@@ -325,7 +320,7 @@ static void new_ActorMgrLeaveView(void* inst, uint32_t actorID, uint32_t objSeq)
 // =============================================================================
 static bool (*_GC_IsCellVisible)(void* thiz, void* a1, int a2, int a3) = nullptr;
 static bool new_GC_IsCellVisible(void* thiz, void* a1, int a2, int a3) {
-    if (maphack || g_espActive) return true; // every surface cell "visible" → no fog
+    if (maphack) return true; // every surface cell "visible" → no fog
     return _GC_IsCellVisible ? _GC_IsCellVisible(thiz, a1, a2, a3) : false;
 }
 
