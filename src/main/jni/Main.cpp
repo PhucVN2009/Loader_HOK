@@ -511,13 +511,15 @@ void DrawMenu() {
                 "=== HOW TO USE UNLOCK SKIN ===");
             ImGui::TextWrapped(
                 "1. Turn ON 'Unlock Skin' toggle.\n"
-                "2. Hero ID MUST be your hero's ID (do NOT use 0).\n"
-                "   Using 0 would show the skin on everyone - disabled.\n"
+                "2. Hero ID = 0 applies skin to ALL heroes.\n"
+                "   Set Hero ID > 0 to target a specific hero.\n"
                 "3. Enter Skin ID (0 = default skin).\n"
                 "4. Click 'Apply Skin'.\n"
-                "5. Enter a match - only YOUR hero wears the skin.\n\n"
+                "5. Enter a match, the skin will be unlocked.\n\n"
                 "Example: Allain Levi skin:\n"
-                "Hero ID = <Allain ID>, Skin ID = 5 -> Apply Skin");
+                "Hero ID = 0, Skin ID = 5 -> Apply Skin\n"
+                "Spam pick that skin ~5 times in lobby.\n"
+                "-> In-game Allain wears Levi skin.");
 
             ImGui::Spacing();
             ImGui::Separator();
@@ -527,13 +529,15 @@ void DrawMenu() {
                 "=== HUONG DAN UNLOCK SKIN ===");
             ImGui::TextWrapped(
                 "1. Bat 'Unlock Skin'.\n"
-                "2. Hero ID PHAI la ID tuong cua ban (KHONG dung 0).\n"
-                "   Dung 0 se hien skin len tat ca - da tat.\n"
+                "2. Hero ID = 0 ap dung cho TAT CA tuong.\n"
+                "   Hero ID > 0 chi ap dung cho tuong do.\n"
                 "3. Nhap Skin ID (0 = skin mac dinh).\n"
                 "4. Bam 'Apply Skin'.\n"
-                "5. Vao tran - chi tuong CUA BAN mac skin.\n\n"
+                "5. Vao tran, skin se duoc mo khoa.\n\n"
                 "Vi du: Skin Levi cua Allain:\n"
-                "Hero ID = <ID Allain>, Skin ID = 5 -> Apply Skin");
+                "Hero ID = 0, Skin ID = 5 -> Apply Skin\n"
+                "Spam pick skin do ~5 lan trong lobby.\n"
+                "-> Trong tran Allain mac skin Levi.");
 
             ImGui::EndChild();
         }
@@ -938,10 +942,6 @@ void hack_injec() {
 
   skAddr = Il2CppGetMethodOffset("Scripts.System.dll", "Assets.Scripts.GameSystem", "CSelectHeroFormLogic", "WearHeroSkin", 2);
   if (skAddr) DobbyHook(skAddr, (void*)new_WearHeroSkin, (void**)&_WearHeroSkin);
-
-  // In-battle skin display: only override the HOST's own hero (configId==hostConfigId)
-  skAddr = Il2CppGetMethodOffset("Scripts.GameCore.dll", "Assets.Scripts.GameLogic", "SkinResourceHelper", "GetActorSkinIdForDisplay", 4);
-  if (skAddr) DobbyHook(skAddr, (void*)new_GetActorSkinIdForDisplay, (void**)&_GetActorSkinIdForDisplay);
 
   // ── Map Hack hooks (FogOfWar – Scripts.GameCore.dll, global namespace) ────
   void* mapAddr;

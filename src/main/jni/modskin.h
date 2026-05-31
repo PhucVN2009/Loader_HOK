@@ -78,14 +78,13 @@ static void hook_unpack(CSProtocol::COMDT_HERO_COMMON_INFO* instance) {
     if (instance == nullptr) return;
     if (CSProtocol::saveData::skinId == 0) return;
 
-    // FIX "ai cũng có skin": chỉ rewrite cho ĐÚNG hero bạn chọn.
-    // Bỏ hẳn case heroId==0 (apply-all) vì COMDT_HERO_COMMON_INFO của người
-    // chơi khác cũng được unpack khi hiển thị (màn VS) → skin lây sang họ.
-    if (CSProtocol::saveData::heroId == 0) return;
-    if (instance->getdwHeroID() != CSProtocol::saveData::heroId) return;
+    bool match = (CSProtocol::saveData::heroId == 0) ||
+                 (instance->getdwHeroID() == CSProtocol::saveData::heroId);
 
-    CSProtocol::saveData::arrayUnpackSkin.emplace_back(instance, instance->getwSkinID());
-    instance->setwSkinID(CSProtocol::saveData::skinId);
+    if (match) {
+        CSProtocol::saveData::arrayUnpackSkin.emplace_back(instance, instance->getwSkinID());
+        instance->setwSkinID(CSProtocol::saveData::skinId);
+    }
 }
 
 // COMDT_HERO_COMMON_INFO::unpack(TdrReadBuf& srcBuf, uint32 cutVer)
@@ -123,49 +122,13 @@ static bool new_IsHaveHeroSkin(void* instance, uint32_t heroId, uint32_t skinId,
 
 // ---------------------------------------------------------------------------
 // CSelectHeroFormLogic::GetHeroWearSkinId(heroID) – virtual
-//
-// FIX: chỉ trả skin mod cho ĐÚNG hero mà bạn đang chọn (heroID khớp
-// saveData::heroId). Trước đây trả cho MỌI heroID nên màn chọn tướng /
-// preview của tướng khác cũng dính skin → giờ scope theo heroId.
-// (heroId == 0 = áp cho tất cả tướng CỦA BẠN trong lobby — vẫn là tài khoản
-//  của bạn, không ảnh hưởng người chơi khác.)
 // ---------------------------------------------------------------------------
 static uint32_t (*_GetHeroWearSkinId)(void* instance, uint32_t heroID);
 static uint32_t new_GetHeroWearSkinId(void* instance, uint32_t heroID) {
-    // Chỉ trả skin mod cho ĐÚNG hero bạn chọn (heroId != 0 và khớp heroID).
-    // Bỏ case heroId==0 vì màn VS gọi hàm này cho hero của MỌI người chơi →
-    // trả skin mod cho tất cả. Yêu cầu nhập đúng Hero ID của bạn.
-    if (unlockskin && CSProtocol::saveData::enable && CSProtocol::saveData::skinId != 0
-        && CSProtocol::saveData::heroId != 0
-        && CSProtocol::saveData::heroId == heroID) {
+    if (unlockskin && CSProtocol::saveData::enable && CSProtocol::saveData::skinId != 0)
         return CSProtocol::saveData::skinId;
-    }
     if (!_GetHeroWearSkinId) return 0;
     return _GetHeroWearSkinId(instance, heroID);
-}
-
-// ---------------------------------------------------------------------------
-// SkinResourceHelper::GetActorSkinIdForDisplay(actorType, configId, skinId,
-//                                              hostConfigId)  – static
-//
-// Đây là hàm game dùng để quyết định skin HIỂN THỊ cho TỪNG actor trong trận.
-// Vì nó nhận hostConfigId (configId hero của CHÍNH BẠN), ta chỉ override skin
-// khi actor này đúng là hero của bạn (configId == hostConfigId) và là HERO.
-// → Skin chỉ áp lên bạn, KHÔNG áp lên đồng đội / địch.
-// ---------------------------------------------------------------------------
-static uint32_t (*_GetActorSkinIdForDisplay)(int actorType, uint32_t configId,
-                                             uint32_t skinId, uint32_t hostConfigId);
-static uint32_t new_GetActorSkinIdForDisplay(int actorType, uint32_t configId,
-                                             uint32_t skinId, uint32_t hostConfigId) {
-    if (unlockskin && CSProtocol::saveData::enable && CSProtocol::saveData::skinId != 0
-        && actorType == 0 /*ACTOR_TYPE_HERO*/
-        && configId != 0 && configId == hostConfigId) {
-        uint32_t target = CSProtocol::saveData::heroId;
-        if (target == 0 || target == configId)
-            return CSProtocol::saveData::skinId;
-    }
-    if (!_GetActorSkinIdForDisplay) return skinId;
-    return _GetActorSkinIdForDisplay(actorType, configId, skinId, hostConfigId);
 }
 
 // ---------------------------------------------------------------------------
