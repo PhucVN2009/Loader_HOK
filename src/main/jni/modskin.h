@@ -122,13 +122,46 @@ static bool new_IsHaveHeroSkin(void* instance, uint32_t heroId, uint32_t skinId,
 
 // ---------------------------------------------------------------------------
 // CSelectHeroFormLogic::GetHeroWearSkinId(heroID) – virtual
+//
+// FIX: chỉ trả skin mod cho ĐÚNG hero mà bạn đang chọn (heroID khớp
+// saveData::heroId). Trước đây trả cho MỌI heroID nên màn chọn tướng /
+// preview của tướng khác cũng dính skin → giờ scope theo heroId.
+// (heroId == 0 = áp cho tất cả tướng CỦA BẠN trong lobby — vẫn là tài khoản
+//  của bạn, không ảnh hưởng người chơi khác.)
 // ---------------------------------------------------------------------------
 static uint32_t (*_GetHeroWearSkinId)(void* instance, uint32_t heroID);
 static uint32_t new_GetHeroWearSkinId(void* instance, uint32_t heroID) {
-    if (unlockskin && CSProtocol::saveData::enable && CSProtocol::saveData::skinId != 0)
-        return CSProtocol::saveData::skinId;
+    if (unlockskin && CSProtocol::saveData::enable && CSProtocol::saveData::skinId != 0) {
+        uint32_t target = CSProtocol::saveData::heroId;
+        if (target == 0 || target == heroID)
+            return CSProtocol::saveData::skinId;
+    }
     if (!_GetHeroWearSkinId) return 0;
     return _GetHeroWearSkinId(instance, heroID);
+}
+
+// ---------------------------------------------------------------------------
+// SkinResourceHelper::GetActorSkinIdForDisplay(actorType, configId, skinId,
+//                                              hostConfigId)  – static
+//
+// Đây là hàm game dùng để quyết định skin HIỂN THỊ cho TỪNG actor trong trận.
+// Vì nó nhận hostConfigId (configId hero của CHÍNH BẠN), ta chỉ override skin
+// khi actor này đúng là hero của bạn (configId == hostConfigId) và là HERO.
+// → Skin chỉ áp lên bạn, KHÔNG áp lên đồng đội / địch.
+// ---------------------------------------------------------------------------
+static uint32_t (*_GetActorSkinIdForDisplay)(int actorType, uint32_t configId,
+                                             uint32_t skinId, uint32_t hostConfigId);
+static uint32_t new_GetActorSkinIdForDisplay(int actorType, uint32_t configId,
+                                             uint32_t skinId, uint32_t hostConfigId) {
+    if (unlockskin && CSProtocol::saveData::enable && CSProtocol::saveData::skinId != 0
+        && actorType == 0 /*ACTOR_TYPE_HERO*/
+        && configId != 0 && configId == hostConfigId) {
+        uint32_t target = CSProtocol::saveData::heroId;
+        if (target == 0 || target == configId)
+            return CSProtocol::saveData::skinId;
+    }
+    if (!_GetActorSkinIdForDisplay) return skinId;
+    return _GetActorSkinIdForDisplay(actorType, configId, skinId, hostConfigId);
 }
 
 // ---------------------------------------------------------------------------

@@ -578,9 +578,19 @@ void DrawMenu() {
         if (m_aimEnabled) {
             ImGui::SliderInt("Aim Distance (10-150)", &m_aimDistance, 10, 150);
             ImGui::SliderInt("Aim Smooth (1-50)",     &m_aimSmooth,    1,  50);
+
+            ImGui::Text("Loai Aim:");
+            ImGui::RadioButton("Mau thap nhat",   &m_aimType, 0); ImGui::SameLine();
+            ImGui::RadioButton("% Mau thap nhat", &m_aimType, 1); ImGui::SameLine();
+            ImGui::RadioButton("Gan nhat",        &m_aimType, 2);
+
             ImGui::Checkbox("Aim Skill 1", &m_aimSkill1); ImGui::SameLine();
             ImGui::Checkbox("Aim Skill 2", &m_aimSkill2); ImGui::SameLine();
-            ImGui::Checkbox("Aim Skill 3", &m_aimSkill3);
+            ImGui::Checkbox("Aim Skill 3", &m_aimSkill3); ImGui::SameLine();
+            ImGui::Checkbox("Aim Skill 4", &m_aimSkill4);
+
+            ImGui::Checkbox("Ve vong tron tam aim", &m_aimDrawRange); ImGui::SameLine();
+            ImGui::Checkbox("Ve line den muc tieu", &m_aimDrawLine);
             ImGui::Checkbox("Aimbot Debug Overlay", &m_aimDebug);
         }
     }
@@ -679,7 +689,7 @@ inline EGLBoolean hook_eglSwapBuffers(EGLDisplay dpy, EGLSurface surface) {
 
   DrawLogo();
   DrawMenu();
-  if (ImGuiOK) { AimbotTick(); DrawAimbotDebug(); }
+  if (ImGuiOK) { AimbotTick(); DrawAimbot(g_GlWidth, g_GlHeight); }
 
   ImGui::End();
   ImGui::Render();
@@ -932,6 +942,10 @@ void hack_injec() {
 
   skAddr = Il2CppGetMethodOffset("Scripts.System.dll", "Assets.Scripts.GameSystem", "CSelectHeroFormLogic", "WearHeroSkin", 2);
   if (skAddr) DobbyHook(skAddr, (void*)new_WearHeroSkin, (void**)&_WearHeroSkin);
+
+  // In-battle skin display: only override the HOST's own hero (configId==hostConfigId)
+  skAddr = Il2CppGetMethodOffset("Scripts.GameCore.dll", "Assets.Scripts.GameLogic", "SkinResourceHelper", "GetActorSkinIdForDisplay", 4);
+  if (skAddr) DobbyHook(skAddr, (void*)new_GetActorSkinIdForDisplay, (void**)&_GetActorSkinIdForDisplay);
 
   // ── Map Hack hooks (FogOfWar – Scripts.GameCore.dll, global namespace) ────
   void* mapAddr;

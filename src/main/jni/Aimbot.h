@@ -35,7 +35,11 @@ static int   m_aimSmooth   = 50;      // 12_InputValue_50_Aim Smooth (1-50)
 static bool  m_aimSkill1   = true;    // 13_CheckBox_True_Aim Skill 1
 static bool  m_aimSkill2   = true;    // 14_CheckBox_True_Aim Skill 2
 static bool  m_aimSkill3   = true;    // 15_CheckBox_True_Aim Skill 3
+static bool  m_aimSkill4   = true;    // Aim Skill 4 (heroes with a 4th skill)
 static bool  m_aimDebug    = false;   // 16_CheckBox_False_Aimbot Debug Overlay
+static int   m_aimType     = 2;       // 0=Lowest HP, 1=Lowest HP%, 2=Closest
+static bool  m_aimDrawRange = true;   // draw the aim-range circle
+static bool  m_aimDrawLine  = true;   // draw a line to the current target
 
 static bool  g_antiBan     = true;    // 1_CheckBox_True_Bật Anti-Ban
 
@@ -78,6 +82,8 @@ static int      (*aim_GetType)(void*)                       = nullptr;
 static uint32_t (*aim_GetPid)(void*)                        = nullptr;
 static void*    (*aim_GpcManager)(void*)                    = nullptr;
 static bool     (*aim_IsHostView)(void*)                    = nullptr;  // ActorHelper.IsHostPlayerView
+static void*    (*aim_CamGetMain)(void*)                    = nullptr;  // Camera.get_main
+static void     (*aim_W2S)(void*, AimVec3*, int, AimVec3*)  = nullptr;  // Camera.WorldToScreenPoint_Injected
 
 // -----------------------------------------------------------------------------
 // Actor cache
@@ -92,11 +98,13 @@ static std::atomic<uintptr_t>      g_aimHostActor{0};
 static std::atomic<uint32_t>       g_aimHostPid{0};
 static int                         g_aimHostCamp = -1;
 
-// Current target + skill slot (for debug overlay)
+// Current target + skill slot (for debug overlay / drawing)
 static std::atomic<uintptr_t>      g_aimTarget{0};
 static std::atomic<int>            g_aimSlot{0};
 static float                       g_aimTargetDist = 0.0f;
 static int                         g_aimTargetHp = 0, g_aimTargetHpMax = 0;
+static AimVec3                     g_aimTargetPos = {0,0,0};   // last target world pos (for line)
+static std::atomic<bool>           g_aimHasTarget{false};
 
 // -----------------------------------------------------------------------------
 // Safe memory helpers
@@ -213,8 +221,8 @@ static inline uintptr_t AimSelectTarget(AimVec3 myPos, int myCamp, AimVec3& outP
         std::lock_guard<std::mutex> lk(g_aimMutex);
         snap = g_aimCache;
     }
-    uintptr_t best = 0; float bestDist = 1e30f; AimVec3 bestPos{0,0,0};
-    int bestHp = 0, bestHpMax = 0;
+    uintptr_t best = 0; float bestScore = 1e30f; AimVec3 bestPos{0,0,0};
+    int bestHp = 0, bestHpMax = 0; float bestDist = 0.0f;
     float maxRange = (float)m_aimDistance;
 
     for (auto& c : snap) {
@@ -238,7 +246,18 @@ static inline uintptr_t AimSelectTarget(AimVec3 myPos, int myCamp, AimVec3& outP
         }
         if (hp <= 0) continue;
 
-        if (d < bestDist) { bestDist = d; best = actor; bestPos = ePos; bestHp = hp; bestHpMax = hpMax; }
+        // score by aim type (lower = better)
+        float score;
+        switch (m_aimType) {
+            case 0:  score = (float)hp; break;                        // lowest HP
+            case 1:  score = (float)hp / (float)(hpMax > 0 ? hpMax : 1); break; // lowest HP%
+            default: score = d; break;                                // closest
+        }
+
+        if (score < bestScore) {
+            bestScore = score; best = actor; bestPos = ePos;
+            bestHp = hp; bestHpMax = hpMax; bestDist = d;
+        }
     }
 
     if (best) {
@@ -274,15 +293,19 @@ static AimVec3 hook_GetUseSkillDir(void* instance) {
     if (!instance || !m_aimEnabled) return orig;
 
     // active skill slot from the indicator: +0x58 -> SkillSlotLinker, +0x30 -> SlotType
-    int slot = 0;
+    // SlotType enum: 1=skill1, 2=skill2, 3=skill3, 4=EX3 / 5=skill4 -> map to "4"
+    int rawSlot = 0;
     uintptr_t ssl = aimRead<uintptr_t>((uintptr_t)instance + AIM_OFF_SCI_SKILLSLOT, 0);
-    if (aimValidPtr(ssl)) slot = aimRead<int>(ssl + AIM_OFF_SLOT_TYPE, 0);
-    if (slot >= 1 && slot <= 3) g_aimSlot.store(slot);
+    if (aimValidPtr(ssl)) rawSlot = aimRead<int>(ssl + AIM_OFF_SLOT_TYPE, 0);
+    int slot = rawSlot;
+    if (rawSlot == 4 || rawSlot == 5) slot = 4;     // 4th-skill heroes
+    if (slot >= 1 && slot <= 4) g_aimSlot.store(slot);
 
     bool slotAllowed = (slot == 0)
                     || (slot == 1 && m_aimSkill1)
                     || (slot == 2 && m_aimSkill2)
-                    || (slot == 3 && m_aimSkill3);
+                    || (slot == 3 && m_aimSkill3)
+                    || (slot == 4 && m_aimSkill4);
     if (!slotAllowed) return orig;
 
     uintptr_t host = g_aimHostActor.load();
@@ -294,7 +317,9 @@ static AimVec3 hook_GetUseSkillDir(void* instance) {
     AimVec3 ePos;
     uintptr_t target = AimSelectTarget(myPos, g_aimHostCamp, ePos);
     g_aimTarget.store(target);
-    if (!target) return orig;
+    if (!target) { g_aimHasTarget.store(false); return orig; }
+    g_aimTargetPos = ePos;
+    g_aimHasTarget.store(true);
 
     AimVec3 eFwd; aimReadForward(target, eFwd);
     // smooth 1..50 -> larger smooth = slower/heavier lead (lower bullet speed)
@@ -330,6 +355,10 @@ static inline void AimbotInstallHook() {
         "Scripts.GameCore.dll", "Assets.Scripts.GameLogic", "GamePlayerCenter", "GetPlayerCenterManager", 0);
     aim_IsHostView = (bool (*)(void*))Il2CppGetMethodOffset(
         "Scripts.GameCore.dll", "Assets.Scripts.GameLogic", "ActorHelper", "IsHostPlayerView", 1);
+    aim_CamGetMain = (void* (*)(void*))Il2CppGetMethodOffset(
+        "UnityEngine.CoreModule.dll", "UnityEngine", "Camera", "get_main", 0);
+    aim_W2S = (void (*)(void*, AimVec3*, int, AimVec3*))Il2CppGetMethodOffset(
+        "UnityEngine.CoreModule.dll", "UnityEngine", "Camera", "WorldToScreenPoint_Injected", 3);
 
     void* spawn = Il2CppGetMethodOffset(
         "Scripts.GameCore.dll", "Assets.Scripts.GameLogic", "ActorLinker", "HOK_OnSpawnActor", 0);
@@ -363,31 +392,82 @@ static inline void AimbotTick() {
     }
 }
 
-// -----------------------------------------------------------------------------
-// Debug overlay (drawn from the render loop when enabled)
-// -----------------------------------------------------------------------------
-static inline void DrawAimbotDebug() {
-    if (!m_aimDebug) return;
-    char buf[256];
-    uintptr_t host = g_aimHostActor.load();
-    uintptr_t tgt  = g_aimTarget.load();
-    int cache;
-    { std::lock_guard<std::mutex> lk(g_aimMutex); cache = (int)g_aimCache.size(); }
+// World -> screen (returns false if behind camera). Unity screen origin is
+// bottom-left, so flip Y to ImGui's top-left.
+static inline bool AimW2S(void* cam, const AimVec3& w, float W, float H, ImVec2& out) {
+    if (!aim_W2S) return false;
+    AimVec3 in = w, sp = {0,0,0};
+    aim_W2S(cam, &in, 2 /*Mono*/, &sp);
+    if (sp.z <= 0.0f) return false;
+    out = ImVec2(sp.x, H - sp.y);
+    return true;
+}
 
-    if (!m_aimEnabled) {
-        snprintf(buf, sizeof(buf), "Aimbot: OFF | S1=%d S2=%d S3=%d",
-                 (int)m_aimSkill1, (int)m_aimSkill2, (int)m_aimSkill3);
-    } else if (!tgt) {
-        snprintf(buf, sizeof(buf),
-                 "Aimbot: ON | slot=%d | dist=%d smooth=%d | cache=%d | host=%s | NO TARGET",
-                 g_aimSlot.load(), m_aimDistance, m_aimSmooth, cache, host ? "OK" : "FAIL");
-    } else {
-        snprintf(buf, sizeof(buf),
-                 "Aimbot: TARGET | slot=%d | dist=%.1f | hp=%d/%d | cache=%d",
-                 g_aimSlot.load(), g_aimTargetDist, g_aimTargetHp, g_aimTargetHpMax, cache);
-    }
+// -----------------------------------------------------------------------------
+// Drawing: aim-range circle + line to target + (optional) debug text.
+// Called every frame from the render loop.
+// -----------------------------------------------------------------------------
+static inline void DrawAimbot(int screenW, int screenH) {
+    if (!m_aimEnabled && !m_aimDebug) return;
     ImDrawList* dl = ImGui::GetBackgroundDrawList();
-    dl->AddRectFilled(ImVec2(8, 8), ImVec2(8 + ImGui::CalcTextSize(buf).x + 8, 30),
-                      IM_COL32(0, 0, 0, 150));
-    dl->AddText(ImVec2(12, 11), IM_COL32(0, 255, 130, 255), buf);
+    const float W = (float)screenW, H = (float)screenH;
+
+    void* cam = aim_CamGetMain ? aim_CamGetMain(nullptr) : nullptr;
+    uintptr_t host = g_aimHostActor.load();
+
+    // ---- aim-range circle around the host hero ----
+    if (m_aimEnabled && m_aimDrawRange && cam && host) {
+        AimVec3 myPos;
+        if (aimReadPos(host, myPos)) {
+            ImVec2 center;
+            if (AimW2S(cam, myPos, W, H, center)) {
+                // project a point at world-range to derive a screen radius
+                AimVec3 edge = {myPos.x + (float)m_aimDistance, myPos.y, myPos.z};
+                ImVec2 edgeS;
+                float radius = 90.0f;
+                if (AimW2S(cam, edge, W, H, edgeS)) {
+                    float dx = edgeS.x - center.x, dy = edgeS.y - center.y;
+                    radius = sqrtf(dx*dx + dy*dy);
+                    if (radius < 20.0f) radius = 20.0f;
+                    if (radius > W)     radius = W;
+                }
+                dl->AddCircle(center, radius, IM_COL32(0, 220, 255, 160), 64, 2.0f);
+            }
+        }
+    }
+
+    // ---- line from host to the current target ----
+    if (m_aimEnabled && m_aimDrawLine && cam && host && g_aimHasTarget.load()) {
+        AimVec3 myPos, tPos = g_aimTargetPos;
+        if (aimReadPos(host, myPos)) {
+            ImVec2 a, b;
+            if (AimW2S(cam, myPos, W, H, a) && AimW2S(cam, tPos, W, H, b)) {
+                dl->AddLine(a, b, IM_COL32(255, 40, 40, 220), 2.0f);
+                dl->AddCircleFilled(b, 6.0f, IM_COL32(255, 40, 40, 220));
+            }
+        }
+    }
+
+    // ---- debug overlay text ----
+    if (m_aimDebug) {
+        char buf[256];
+        uintptr_t tgt = g_aimTarget.load();
+        int cache; { std::lock_guard<std::mutex> lk(g_aimMutex); cache = (int)g_aimCache.size(); }
+        const char* typeName = (m_aimType == 0) ? "LowHP" : (m_aimType == 1) ? "LowHP%" : "Closest";
+        if (!m_aimEnabled) {
+            snprintf(buf, sizeof(buf), "Aimbot: OFF | S1=%d S2=%d S3=%d S4=%d",
+                     (int)m_aimSkill1, (int)m_aimSkill2, (int)m_aimSkill3, (int)m_aimSkill4);
+        } else if (!tgt) {
+            snprintf(buf, sizeof(buf),
+                     "Aimbot: ON | type=%s slot=%d | dist=%d smooth=%d | cache=%d | host=%s | NO TARGET",
+                     typeName, g_aimSlot.load(), m_aimDistance, m_aimSmooth, cache, host ? "OK" : "FAIL");
+        } else {
+            snprintf(buf, sizeof(buf),
+                     "Aimbot: TARGET | type=%s slot=%d | dist=%.1f | hp=%d/%d | cache=%d",
+                     typeName, g_aimSlot.load(), g_aimTargetDist, g_aimTargetHp, g_aimTargetHpMax, cache);
+        }
+        dl->AddRectFilled(ImVec2(8, 8), ImVec2(8 + ImGui::CalcTextSize(buf).x + 8, 30),
+                          IM_COL32(0, 0, 0, 150));
+        dl->AddText(ImVec2(12, 11), IM_COL32(0, 255, 130, 255), buf);
+    }
 }
