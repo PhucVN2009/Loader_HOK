@@ -50,6 +50,7 @@
 #include "modskin.h"
 #include "modmap.h"
 #include "modcam.h"
+#include "ESP.h"
 #include "imgui/Icon.h"
 #include "imgui/Iconcpp.h"
 #include "AutoUpdate/IL2CppSDKGenerator/Il2Cpp.h"
@@ -557,6 +558,22 @@ void DrawMenu() {
         if (m_CameraZoom) {
             ImGui::SliderInt("Zoom", &m_CameraZoomValue, 0, 100);
         }
+
+        // ── Cài đặt ESP ─────────────────────────────────────────────────────
+        ImGui::Spacing();
+        ImGui::Separator();
+        ImGui::Spacing();
+
+        ImGui::TextColored(ImColor(0, 255, 255), ICON_FA_EYE " Cai dat ESP");
+        ImGui::Spacing();
+
+        ImGui::Checkbox("Bat Anti-Ban", &g_antiBan);
+        ImGui::Checkbox("ESP: Duong ke", &g_espLine);
+        ImGui::Checkbox("ESP: Hop", &g_espBox);
+        ImGui::Checkbox("ESP: Thanh mau", &g_espHealth);
+        ImGui::Checkbox("ESP: Khoang cach", &g_espDistance);
+        ImGui::Checkbox("ESP: Linh (Minion)", &g_espMinion);
+        ImGui::Checkbox("ESP: Quai rung (Monster)", &g_espMonster);
     }
     else if (activeFeature == 1) {
         ImGui::Columns(2, "deviceInfo", false);
@@ -653,6 +670,7 @@ inline EGLBoolean hook_eglSwapBuffers(EGLDisplay dpy, EGLSurface surface) {
 
   DrawLogo();
   DrawMenu();
+  if (ImGuiOK) DrawESP(g_GlWidth, g_GlHeight);
 
   ImGui::End();
   ImGui::Render();
@@ -827,9 +845,9 @@ bool is_current_process(const char* target_name) {
 static int32_t (*_AnoSDKGetReportData)(char* buf, int32_t len)  = nullptr;
 static int32_t (*_AnoSDKGetReportData3)(char* buf, int32_t len) = nullptr;
 static int32_t (*_AnoSDKGetReportData4)(char* buf, int32_t len) = nullptr;
-static int32_t new_AnoSDKGetReportData(char* buf, int32_t len)  { return 0; }
-static int32_t new_AnoSDKGetReportData3(char* buf, int32_t len) { return 0; }
-static int32_t new_AnoSDKGetReportData4(char* buf, int32_t len) { return 0; }
+static int32_t new_AnoSDKGetReportData(char* buf, int32_t len)  { if (!g_antiBan && _AnoSDKGetReportData)  return _AnoSDKGetReportData(buf, len);  return 0; }
+static int32_t new_AnoSDKGetReportData3(char* buf, int32_t len) { if (!g_antiBan && _AnoSDKGetReportData3) return _AnoSDKGetReportData3(buf, len); return 0; }
+static int32_t new_AnoSDKGetReportData4(char* buf, int32_t len) { if (!g_antiBan && _AnoSDKGetReportData4) return _AnoSDKGetReportData4(buf, len); return 0; }
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Auto-resolve a libGameCore.so function by an internal string it references.
@@ -1014,6 +1032,9 @@ void hack_injec() {
     if (fn) DobbyHook(fn, (void*)new_AnoSDKGetReportData4, (void**)&_AnoSDKGetReportData4);
     dlclose(anogs);
   }
+
+  // ── ESP: hook ActorLinker spawn / late-update + resolve camera & getters ──
+  EspInstallHook();
 
   ImGuiOK = true;
 }
