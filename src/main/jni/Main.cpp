@@ -504,20 +504,33 @@ void DrawMenu() {
 
     if (activeFeature == 0) {
 
-        // ── Map Hack (split into 2 independent channels) ───────────────────
+        // ── Map Hack (3 modes — chon theo nhu cau) ─────────────────────────
         ImGui::TextColored(ImColor(0, 255, 255), ICON_FA_MAP " Map Hack");
         ImGui::Spacing();
 
-        ImGui::Checkbox("Map Hack - GameCore (an toan)", &maphack_gc);
+        // 1) Render-only: safe, no desync (terrain/fog overlay off)
+        ImGui::Checkbox("1. Mo fog dia hinh (AN TOAN)", &maphack_render);
         ImGui::TextColored(ImColor(150, 220, 150),
-            "  Mo fog tren minimap/dia hinh. KHONG desync.");
+            "  Tat lop fog -> thay dia hinh/bui co. KHONG desync.\n"
+            "  KHONG hien dich an (engine khoa o tang logic).");
 
         ImGui::Spacing();
 
-        ImGui::Checkbox("Map Hack - il2cpp (hien dich)", &maphack_il2cpp);
+        // 2) Reveal enemies: works, but inherent lockstep desync
+        ImGui::Checkbox("2. Hien dich qua fog (BI TRAN AO ~2p)", &maphack_reveal);
         ImGui::TextColored(ImColor(255, 170, 120),
-            "  Hien vi tri/mau dich qua fog. CO THE bi 'tran dau ao'\n"
-            "  sau ~2p do lech frame-sync voi server.");
+            "  Ep tam nhin logic -> thay vi tri/mau dich.\n"
+            "  Lech frame-sync voi server -> 'tran dau ao' sau ~2p.\n"
+            "  Day la ban chat lockstep, KHONG fix duoc bang offset.");
+
+        ImGui::Spacing();
+
+        // 3) Bypass desync: experimental, not wired on this build
+        ImGui::BeginDisabled(true);
+        ImGui::Checkbox("3. Ne bo dem desync (CHUA WIRE)", &maphack_nodesync);
+        ImGui::EndDisabled();
+        ImGui::TextColored(ImColor(220, 130, 130),
+            "  Can dump il2cpp de wire ham frame-hash. Rui ro ban.");
 
         ImGui::Spacing();
         ImGui::Separator();
@@ -973,17 +986,25 @@ void hack_injec() {
 
   // ── NATIVE libGameCore.so: Horizon fog – GameGridFow::IsSurfaceCellVisibleConsiderNeighbor ──
   // AUTO-UPDATE: resolve the function at runtime by the internal string it
-  // references, so it survives game updates (no manual offset). Falls back to the
-  // known static offset for this build if the scan fails.
+  // references, so it survives game updates (no manual offset).
+  //
+  // NOTE: the previous hardcoded fallback (base + 0x34839EC) is STALE for the
+  // current build — in the supplied dump that address lands mid-function (it is
+  // not a prologue). Hooking there would patch instructions in the middle of a
+  // routine and corrupt it. So we now hook ONLY when the runtime string-resolver
+  // succeeds; otherwise we skip the native hook entirely. The il2cpp layers still
+  // drive the reveal, so the feature degrades safely instead of crashing.
   {
     ProcMap gcMap = KittyMemory::getLibraryBaseMap("libGameCore.so");
     for (int i = 0; i < 30 && !gcMap.isValid(); i++) { sleep(1); gcMap = KittyMemory::getLibraryBaseMap("libGameCore.so"); }
     if (gcMap.isValid()) {
       uintptr_t fn = ResolveGCFuncByString("libGameCore.so", "IsSurfaceCellVisibleConsiderNeighbor");
-      const char* how = "auto";
-      if (!fn) { fn = (uintptr_t)gcMap.startAddress + 0x34839EC; how = "fallback-offset"; }
-      DobbyHook((void*)fn, (void*)new_GC_IsCellVisible, (void**)&_GC_IsCellVisible);
-      LOGD("libGameCore.so base=%p, IsCellVisible(%s) hooked @ %p", (void*)gcMap.startAddress, how, (void*)fn);
+      if (fn) {
+        DobbyHook((void*)fn, (void*)new_GC_IsCellVisible, (void**)&_GC_IsCellVisible);
+        LOGD("libGameCore.so base=%p, IsCellVisible auto-resolved & hooked @ %p", (void*)gcMap.startAddress, (void*)fn);
+      } else {
+        LOGD("libGameCore.so IsCellVisible NOT resolved - native fow hook skipped (no stale fallback)");
+      }
     } else {
       LOGD("libGameCore.so not found - native fow hook skipped");
     }
