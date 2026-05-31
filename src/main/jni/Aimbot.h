@@ -58,6 +58,7 @@ static bool  g_antiBan     = true;    // 1_CheckBox_True_Bật Anti-Ban
 #define AIM_OFF_GPC_HOSTPLY   0x60    // GamePlayerCenter._hostPlayer
 #define AIM_OFF_PLAYER_CAMP   0x7C    // Player.playerCamp
 #define AIM_OFF_PLAYER_CAPT   0x1F8   // Player.Captain (PoolObjHandle<ActorLinker>)
+#define AIM_OFF_POOLHANDLE_OBJ 0x08   // PoolObjHandle._handleObj (object ptr) within the handle
 
 // SkillControlIndicator.skillSlot (SkillSlotLinker*) @ 0x58, SlotType @ 0x30
 #define AIM_OFF_SCI_SKILLSLOT 0x58
@@ -76,6 +77,7 @@ static int      (*aim_GetCamp)(void*)                       = nullptr;
 static int      (*aim_GetType)(void*)                       = nullptr;
 static uint32_t (*aim_GetPid)(void*)                        = nullptr;
 static void*    (*aim_GpcManager)(void*)                    = nullptr;
+static bool     (*aim_IsHostView)(void*)                    = nullptr;  // ActorHelper.IsHostPlayerView
 
 // -----------------------------------------------------------------------------
 // Actor cache
@@ -149,9 +151,10 @@ static inline void AimUpdateHost() {
     uintptr_t hp = aimRead<uintptr_t>(g + AIM_OFF_GPC_HOSTPLY, 0);
     if (aimValidPtr(hp)) {
         g_aimHostCamp = aimRead<int>(hp + AIM_OFF_PLAYER_CAMP, -1);
-        // Player.Captain (PoolObjHandle<ActorLinker>): ptr at +0x00 of the handle
-        uintptr_t cap = aimRead<uintptr_t>(hp + AIM_OFF_PLAYER_CAPT, 0);
-        if (aimValidPtr(cap) && g_aimHostActor.load() == 0) g_aimHostActor.store(cap);
+        // Player.Captain is a PoolObjHandle<ActorLinker>; the object pointer
+        // lives at +0x08 of the handle (offset +0x00 is _handleSeq).
+        uintptr_t cap = aimRead<uintptr_t>(hp + AIM_OFF_PLAYER_CAPT + AIM_OFF_POOLHANDLE_OBJ, 0);
+        if (aimValidPtr(cap)) g_aimHostActor.store(cap);
     }
 }
 
@@ -186,12 +189,17 @@ static void hook_AimLate(void* inst, int delta) {
                 g_aimCache.push_back({a, camp, type, frame});
             }
         }
-        // host detection by playerId
-        uint32_t hostPid = g_aimHostPid.load();
-        if (hostPid && aim_GetPid) {
-            uint32_t pid = aim_GetPid(inst);
-            if (pid && pid == hostPid) g_aimHostActor.store(a);
+        // host detection: prefer the game's own check, fall back to playerId
+        bool isHost = false;
+        if (aim_IsHostView) isHost = aim_IsHostView(inst);
+        if (!isHost) {
+            uint32_t hostPid = g_aimHostPid.load();
+            if (hostPid && aim_GetPid) {
+                uint32_t pid = aim_GetPid(inst);
+                isHost = (pid && pid == hostPid);
+            }
         }
+        if (isHost) g_aimHostActor.store(a);
     }
     if (orig_AimLate) orig_AimLate(inst, delta);
 }
@@ -320,6 +328,8 @@ static inline void AimbotInstallHook() {
         "Scripts.GameCore.dll", "Assets.Scripts.GameLogic", "ActorLinker", "get_playerId", 0);
     aim_GpcManager = (void* (*)(void*))Il2CppGetMethodOffset(
         "Scripts.GameCore.dll", "Assets.Scripts.GameLogic", "GamePlayerCenter", "GetPlayerCenterManager", 0);
+    aim_IsHostView = (bool (*)(void*))Il2CppGetMethodOffset(
+        "Scripts.GameCore.dll", "Assets.Scripts.GameLogic", "ActorHelper", "IsHostPlayerView", 1);
 
     void* spawn = Il2CppGetMethodOffset(
         "Scripts.GameCore.dll", "Assets.Scripts.GameLogic", "ActorLinker", "HOK_OnSpawnActor", 0);
