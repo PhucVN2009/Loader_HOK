@@ -47,10 +47,9 @@
 #include "imgui/Font.h"
 #include "imgui/Roboto-Regular.h"
 #include "QQInj.h"
-#include "modskin.h"
 #include "modmap.h"
 #include "modcam.h"
-#include "Aimbot.h"
+#include "music_player.h"
 #include "imgui/Icon.h"
 #include "imgui/Iconcpp.h"
 #include "AutoUpdate/IL2CppSDKGenerator/Il2Cpp.h"
@@ -61,6 +60,29 @@
 inline static int g_GlHeight, g_GlWidth;
 inline static bool g_IsSetup = false;
 inline int prevWidth, prevHeight;
+
+// JavaVM handle for the in-menu music player (music_player.h)
+JavaVM* g_jvm = nullptr;
+
+// JNI_OnLoad isn't guaranteed to fire for an injected library, so fetch the
+// already-created JVM from the runtime as a fallback (used by the music tab).
+static void EnsureJavaVM() {
+  if (g_jvm) return;
+  typedef jint (*GetVMs_t)(JavaVM**, jsize, jsize*);
+  GetVMs_t getVMs = nullptr;
+  const char* libs[] = { "libnativehelper.so", "libart.so", "libandroid_runtime.so" };
+  for (const char* lib : libs) {
+    void* h = dlopen(lib, RTLD_NOLOAD);
+    if (!h) h = dlopen(lib, RTLD_NOW);
+    if (!h) continue;
+    getVMs = (GetVMs_t)dlsym(h, "JNI_GetCreatedJavaVMs");
+    if (getVMs) break;
+  }
+  if (!getVMs) return;
+  JavaVM* vm = nullptr;
+  jsize n = 0;
+  if (getVMs(&vm, 1, &n) == 0 && n > 0 && vm) g_jvm = vm;
+}
 
 std::string GetProp(const char* key) {
   char value[PROP_VALUE_MAX];
@@ -450,7 +472,7 @@ void DrawMenu() {
     ImVec4 rainbow = HSVtoRGB(hue, 1.0f, 1.0f);
     ImGui::PushStyleColor(ImGuiCol_Separator, rainbow);
     ImGui::PushStyleColor(ImGuiCol_CheckMark, rainbow);
-    ImGui::TextColored(rainbow, ICON_FA_SUN " Hok Mod - By Telegram @userKeera");
+    ImGui::TextColored(rainbow, ICON_FA_SUN " Hok Mods - @userKeera");
     ImGui::PopStyleColor();
     ImGui::Spacing();
     ImGui::Separator();
@@ -463,7 +485,7 @@ void DrawMenu() {
 
     ImGui::SetCursorPosX(padding);
     ImGui::PushID(1);
-    if (ImGui::Button(ICON_FA_HOME, ImVec2(buttonWidth, buttonHeight))) {
+    if (ImGui::Button(ICON_FA_HOME " Mods", ImVec2(buttonWidth, buttonHeight))) {
         activeFeature = 0;
     }
     ImGui::PopID();
@@ -471,7 +493,7 @@ void DrawMenu() {
     ImGui::SameLine();
     ImGui::SetCursorPosX(padding * 2 + buttonWidth);
     ImGui::PushID(2);
-    if (ImGui::Button(ICON_FA_DATABASE, ImVec2(buttonWidth, buttonHeight))) {
+    if (ImGui::Button(ICON_FA_MUSIC " Nhac", ImVec2(buttonWidth, buttonHeight))) {
         activeFeature = 1;
     }
     ImGui::PopID();
@@ -482,72 +504,8 @@ void DrawMenu() {
 
     if (activeFeature == 0) {
 
-        // ── Unlock Skin ───────────────────────────────────────────────────
-        if (ImGui::Checkbox("Unlock Skin", &unlockskin)) {
-            if (!unlockskin) CSProtocol::saveData::resetArrayUnpackSkin();
-        }
-
-        if (unlockskin) {
-            ImGui::Spacing();
-            ImGui::InputInt("Hero ID", &heroid);
-            ImGui::InputInt("Skin ID", &skinid);
-            ImGui::Spacing();
-
-            if (ImGui::Button("Apply Skin", ImVec2(-1, 55))) {
-                CSProtocol::saveData::setData((uint32_t)heroid, (uint16_t)skinid);
-                CSProtocol::saveData::setEnable(true);
-            }
-
-            ImGui::Spacing();
-            ImGui::Separator();
-            ImGui::Spacing();
-
-            // ── Guide (scrollable child window) ──────────────────────────
-            ImGui::TextColored(ImColor(255, 220, 0), ICON_FA_INFO_CIRCLE " How to use:");
-            ImGui::BeginChild("guide_scroll", ImVec2(-1, 200), true,
-                              ImGuiWindowFlags_HorizontalScrollbar);
-
-            ImGui::TextColored(ImColor(100, 220, 255),
-                "=== HOW TO USE UNLOCK SKIN ===");
-            ImGui::TextWrapped(
-                "1. Turn ON 'Unlock Skin' toggle.\n"
-                "2. Hero ID = 0 applies skin to ALL heroes.\n"
-                "   Set Hero ID > 0 to target a specific hero.\n"
-                "3. Enter Skin ID (0 = default skin).\n"
-                "4. Click 'Apply Skin'.\n"
-                "5. Enter a match, the skin will be unlocked.\n\n"
-                "Example: Allain Levi skin:\n"
-                "Hero ID = 0, Skin ID = 5 -> Apply Skin\n"
-                "Spam pick that skin ~5 times in lobby.\n"
-                "-> In-game Allain wears Levi skin.");
-
-            ImGui::Spacing();
-            ImGui::Separator();
-            ImGui::Spacing();
-
-            ImGui::TextColored(ImColor(100, 255, 160),
-                "=== HUONG DAN UNLOCK SKIN ===");
-            ImGui::TextWrapped(
-                "1. Bat 'Unlock Skin'.\n"
-                "2. Hero ID = 0 ap dung cho TAT CA tuong.\n"
-                "   Hero ID > 0 chi ap dung cho tuong do.\n"
-                "3. Nhap Skin ID (0 = skin mac dinh).\n"
-                "4. Bam 'Apply Skin'.\n"
-                "5. Vao tran, skin se duoc mo khoa.\n\n"
-                "Vi du: Skin Levi cua Allain:\n"
-                "Hero ID = 0, Skin ID = 5 -> Apply Skin\n"
-                "Spam pick skin do ~5 lan trong lobby.\n"
-                "-> Trong tran Allain mac skin Levi.");
-
-            ImGui::EndChild();
-        }
-
         // ── Map Hack ──────────────────────────────────────────────────────
-        ImGui::Spacing();
-        ImGui::Separator();
-        ImGui::Spacing();
-
-        if (ImGui::Checkbox("Map Hack", &maphack)) {}
+        ImGui::Checkbox("Map Hack", &maphack);
 
         ImGui::Spacing();
         ImGui::Separator();
@@ -558,79 +516,80 @@ void DrawMenu() {
         if (m_CameraZoom) {
             ImGui::SliderInt("Zoom", &m_CameraZoomValue, 0, 100);
         }
-
-        // ── Anti-Ban ────────────────────────────────────────────────────────
-        ImGui::Spacing();
-        ImGui::Separator();
-        ImGui::Spacing();
-
-        ImGui::Checkbox("Bat Anti-Ban", &g_antiBan);
-
-        // ── ★ AIMBOT ★ ──────────────────────────────────────────────────────
-        ImGui::Spacing();
-        ImGui::Separator();
-        ImGui::Spacing();
-
-        ImGui::TextColored(ImColor(0, 255, 255), ICON_FA_CROSSHAIRS " AIMBOT");
-        ImGui::Spacing();
-
-        ImGui::Checkbox("Aimbot (Bat/Tat)", &m_aimEnabled);
-        if (m_aimEnabled) {
-            ImGui::SliderInt("Aim Distance (10-150)", &m_aimDistance, 10, 150);
-            ImGui::SliderInt("Aim Smooth (1-50)",     &m_aimSmooth,    1,  50);
-
-            ImGui::Text("Loai Aim:");
-            ImGui::RadioButton("Mau thap nhat",   &m_aimType, 0); ImGui::SameLine();
-            ImGui::RadioButton("% Mau thap nhat", &m_aimType, 1); ImGui::SameLine();
-            ImGui::RadioButton("Gan nhat",        &m_aimType, 2);
-
-            ImGui::Checkbox("Aim Skill 1", &m_aimSkill1); ImGui::SameLine();
-            ImGui::Checkbox("Aim Skill 2", &m_aimSkill2); ImGui::SameLine();
-            ImGui::Checkbox("Aim Skill 3", &m_aimSkill3); ImGui::SameLine();
-            ImGui::Checkbox("Aim Skill 4", &m_aimSkill4);
-
-            ImGui::Checkbox("Ve vong tron tam aim", &m_aimDrawRange); ImGui::SameLine();
-            ImGui::Checkbox("Ve line den muc tieu", &m_aimDrawLine);
-            ImGui::Checkbox("Aimbot Debug Overlay", &m_aimDebug);
-        }
     }
     else if (activeFeature == 1) {
-        ImGui::Columns(2, "deviceInfo", false);
 
-        ImGui::TextColored(ImColor(255, 200, 0), "Device Name:");
-        ImGui::NextColumn();
-        ImGui::TextColored(ImColor(0, 255, 255), "%s", GetProp("ro.product.device").c_str());
-        ImGui::NextColumn();
+        // ── Music Player ──────────────────────────────────────────────────
+        ImGui::TextColored(ImColor(0, 255, 255), ICON_FA_MUSIC " Trinh Phat Nhac");
+        ImGui::Spacing();
 
-        ImGui::TextColored(ImColor(255, 200, 0), "Model:");
-        ImGui::NextColumn();
-        ImGui::TextColored(ImColor(0, 255, 255), "%s", GetProp("ro.product.model").c_str());
-        ImGui::NextColumn();
+        // Now playing + progress
+        ImGui::TextColored(ImColor(255, 220, 0), "Dang phat:");
+        ImGui::SameLine();
+        if (MP::preparing)
+            ImGui::TextColored(ImColor(255, 160, 0), "Dang tai...");
+        else
+            ImGui::TextColored(ImColor(0, 255, 160), "%s", SONG_LIST[MP::cur].name);
 
-        ImGui::TextColored(ImColor(255, 200, 0), "Manufacturer:");
-        ImGui::NextColumn();
-        ImGui::TextColored(ImColor(0, 255, 255), "%s", GetProp("ro.product.manufacturer").c_str());
-        ImGui::NextColumn();
+        int pos = MP::GetPosition();
+        int dur = MP::GetDuration();
+        ImGui::ProgressBar((float)pos / (float)dur, ImVec2(-1, 0),
+                           (MP::FmtTime(pos) + " / " + MP::FmtTime(dur)).c_str());
 
-        ImGui::TextColored(ImColor(255, 200, 0), "Android Version:");
-        ImGui::NextColumn();
-        ImGui::TextColored(ImColor(0, 255, 255), "%s", GetProp("ro.build.version.release").c_str());
-        ImGui::NextColumn();
+        ImGui::Spacing();
 
-        ImGui::TextColored(ImColor(255, 200, 0), "SDK Version:");
-        ImGui::NextColumn();
-        ImGui::TextColored(ImColor(0, 255, 255), "%s", GetProp("ro.build.version.sdk").c_str());
-        ImGui::NextColumn();
+        // Transport buttons
+        float w = (window_size.x - padding * 2 - 20) / 3.0f;
+        if (ImGui::Button(ICON_FA_BACKWARD, ImVec2(w, 55))) {
+            MP::Play((MP::cur - 1 + SONG_COUNT) % SONG_COUNT);
+        }
+        ImGui::SameLine();
+        if (ImGui::Button(MP::playing ? ICON_FA_PAUSE : ICON_FA_PLAY, ImVec2(w, 55))) {
+            if (MP::obj) MP::TogglePause();
+            else         MP::Play(MP::cur);
+        }
+        ImGui::SameLine();
+        if (ImGui::Button(ICON_FA_FORWARD, ImVec2(w, 55))) {
+            MP::Play(MP::NextIdx());
+        }
 
-        ImGui::TextColored(ImColor(255, 200, 0), "CPU ABI:");
-        ImGui::NextColumn();
-        ImGui::TextColored(ImColor(0, 255, 255), "%s", GetProp("ro.product.cpu.abi").c_str());
-        ImGui::NextColumn();
-
-        ImGui::Columns(1);
         ImGui::Spacing();
         ImGui::Separator();
         ImGui::Spacing();
+
+        // Song list
+        ImGui::TextColored(ImColor(255, 220, 0), "Danh sach bai hat:");
+        ImGui::BeginChild("song_list", ImVec2(-1, 200), true);
+        for (int i = 0; i < SONG_COUNT; i++) {
+            bool sel = (i == MP::cur);
+            if (ImGui::Selectable(SONG_LIST[i].name, sel, 0, ImVec2(0, 45))) {
+                MP::Play(i);
+            }
+        }
+        ImGui::EndChild();
+
+        ImGui::Spacing();
+
+        // Volume
+        if (ImGui::SliderFloat("Am luong", &MP::volume, 0.0f, 1.0f, "%.2f")) {
+            MP::SetVolume();
+        }
+        // Speed
+        if (ImGui::SliderFloat("Toc do", &MP::speed, 0.5f, 2.0f, "%.2fx")) {
+            MP::UpdateSpeed();
+        }
+
+        ImGui::Spacing();
+        ImGui::Checkbox("Phat ngau nhien", &MP::shuffle);
+
+        ImGui::Text("Lap lai:");
+        ImGui::SameLine();
+        bool loopChanged = false;
+        loopChanged |= ImGui::RadioButton("Tat", &MP::loop_mode, 0);    ImGui::SameLine();
+        loopChanged |= ImGui::RadioButton("Tat ca", &MP::loop_mode, 1); ImGui::SameLine();
+        loopChanged |= ImGui::RadioButton("1 bai", &MP::loop_mode, 2);
+        // apply loop change immediately if something is loaded
+        if (loopChanged && MP::obj) MP::UpdateSpeed();
     }
 
     ImGui::End();
@@ -687,9 +646,11 @@ inline EGLBoolean hook_eglSwapBuffers(EGLDisplay dpy, EGLSurface surface) {
     }
   }
 
+  EnsureJavaVM();
+  MP::Tick();
+
   DrawLogo();
   DrawMenu();
-  if (ImGuiOK) { AimbotTick(); DrawAimbot(g_GlWidth, g_GlHeight); }
 
   ImGui::End();
   ImGui::Render();
@@ -864,9 +825,11 @@ bool is_current_process(const char* target_name) {
 static int32_t (*_AnoSDKGetReportData)(char* buf, int32_t len)  = nullptr;
 static int32_t (*_AnoSDKGetReportData3)(char* buf, int32_t len) = nullptr;
 static int32_t (*_AnoSDKGetReportData4)(char* buf, int32_t len) = nullptr;
-static int32_t new_AnoSDKGetReportData(char* buf, int32_t len)  { if (!g_antiBan && _AnoSDKGetReportData)  return _AnoSDKGetReportData(buf, len);  return 0; }
-static int32_t new_AnoSDKGetReportData3(char* buf, int32_t len) { if (!g_antiBan && _AnoSDKGetReportData3) return _AnoSDKGetReportData3(buf, len); return 0; }
-static int32_t new_AnoSDKGetReportData4(char* buf, int32_t len) { if (!g_antiBan && _AnoSDKGetReportData4) return _AnoSDKGetReportData4(buf, len); return 0; }
+// Anti-ban is always on: report-data getters return nothing so the SDK
+// has no telemetry to upload.
+static int32_t new_AnoSDKGetReportData(char* buf, int32_t len)  { return 0; }
+static int32_t new_AnoSDKGetReportData3(char* buf, int32_t len) { return 0; }
+static int32_t new_AnoSDKGetReportData4(char* buf, int32_t len) { return 0; }
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Auto-resolve a libGameCore.so function by an internal string it references.
@@ -925,23 +888,6 @@ void hack_injec() {
   }
   sleep(5);
   Il2CppAttach("libil2cpp.so");
-
-  // ── Unlock Skin hooks ────────────────────────────────────────────────────
-  void* skAddr;
-  skAddr = Il2CppGetMethodOffset("Scripts.Plugins.dll", "CSProtocol", "COMDT_HERO_COMMON_INFO", "unpack", 2);
-  if (skAddr) DobbyHook(skAddr, (void*)new_unpack, (void**)&_unpack);
-
-  skAddr = Il2CppGetMethodOffset("Scripts.Base.dll", "Assets.Scripts.GameSystem", "CRoleInfo", "IsCanUseSkin", 3);
-  if (skAddr) DobbyHook(skAddr, (void*)new_IsCanUseSkin, (void**)&_IsCanUseSkin);
-
-  skAddr = Il2CppGetMethodOffset("Scripts.Base.dll", "Assets.Scripts.GameSystem", "CRoleInfo", "IsHaveHeroSkin", 4);
-  if (skAddr) DobbyHook(skAddr, (void*)new_IsHaveHeroSkin, (void**)&_IsHaveHeroSkin);
-
-  skAddr = Il2CppGetMethodOffset("Scripts.System.dll", "Assets.Scripts.GameSystem", "CSelectHeroFormLogic", "GetHeroWearSkinId", 1);
-  if (skAddr) DobbyHook(skAddr, (void*)new_GetHeroWearSkinId, (void**)&_GetHeroWearSkinId);
-
-  skAddr = Il2CppGetMethodOffset("Scripts.System.dll", "Assets.Scripts.GameSystem", "CSelectHeroFormLogic", "WearHeroSkin", 2);
-  if (skAddr) DobbyHook(skAddr, (void*)new_WearHeroSkin, (void**)&_WearHeroSkin);
 
   // ── Map Hack hooks (FogOfWar – Scripts.GameCore.dll, global namespace) ────
   void* mapAddr;
@@ -1052,9 +998,6 @@ void hack_injec() {
     dlclose(anogs);
   }
 
-  // ── Aimbot: hook GetUseSkillDirection + actor tracking, resolve getters ──
-  AimbotInstallHook();
-
   ImGuiOK = true;
 }
 
@@ -1069,6 +1012,7 @@ void hack_thread(pid_t pid) {
 }
 
 JNIEXPORT jint JNICALL JNI_OnLoad(JavaVM *vm, void * reserved) {
+  g_jvm = vm;
   JNIEnv *env;
   vm->GetEnv((void **) &env, JNI_VERSION_1_6);
   return JNI_VERSION_1_6;
