@@ -822,16 +822,149 @@ bool is_current_process(const char* target_name) {
 
 
 
-// ── AnoSDK anti-cheat bypass ─────────────────────────────────────────────────
-// Intercept GetReportData variants so the SDK has nothing to upload.
-static int32_t (*_AnoSDKGetReportData)(char* buf, int32_t len)  = nullptr;
-static int32_t (*_AnoSDKGetReportData2)(char* buf, int32_t len) = nullptr;
-static int32_t (*_AnoSDKGetReportData3)(char* buf, int32_t len) = nullptr;
-static int32_t (*_AnoSDKGetReportData4)(char* buf, int32_t len) = nullptr;
-static int32_t new_AnoSDKGetReportData(char* buf, int32_t len)  { return 0; }
-static int32_t new_AnoSDKGetReportData2(char* buf, int32_t len) { return 0; }
-static int32_t new_AnoSDKGetReportData3(char* buf, int32_t len) { return 0; }
-static int32_t new_AnoSDKGetReportData4(char* buf, int32_t len) { return 0; }
+// ── AnoSDK full bypass ────────────────────────────────────────────────────────
+// AnoSDK detection surface (from binary analysis):
+//   • Reads /proc/self/maps  → finds injected .so files
+//   • ms_hook_opcode scan   → detects Dobby/Substrate inline trampolines
+//   • "zygisk" string check → explicit Zygisk injection detection
+//   • AnoSDKIoctl/libanort  → direct network upload channel
+//   • AnoSDKOnRecvSignature → server-side code-integrity verification
+//   • AnoSDKInit/InitEx     → starts monitoring threads; must be blocked first
+//
+// Strategy:
+//   1. Hook dlopen → apply all AnoSDK hooks the instant each lib loads, BEFORE
+//      the game can call AnoSDKInit (so monitoring never starts).
+//   2. Hook fopen  → filter /proc/self/maps so the SDK cannot see our .so.
+//   3. Cover every exported function in libanogs.so AND libanort.so.
+// ─────────────────────────────────────────────────────────────────────────────
+
+// ── libanogs.so function pointers & stubs ────────────────────────────────────
+static int32_t (*_AnoSDKInit)(const void*, int32_t)              = nullptr;
+static int32_t (*_AnoSDKInitEx)(const void*, int32_t)            = nullptr;
+static int32_t (*_AnoSDKGetReportData)(char*, int32_t)           = nullptr;
+static int32_t (*_AnoSDKGetReportData2)(char*, int32_t)          = nullptr;
+static int32_t (*_AnoSDKGetReportData3)(char*, int32_t)          = nullptr;
+static int32_t (*_AnoSDKGetReportData4)(char*, int32_t)          = nullptr;
+static int32_t (*_AnoSDKDelReportData)(char*, int32_t)           = nullptr;
+static int32_t (*_AnoSDKDelReportData3)(char*, int32_t)          = nullptr;
+static int32_t (*_AnoSDKDelReportData4)(char*, int32_t)          = nullptr;
+static int32_t (*_AnoSDKIoctl)(int32_t, const void*, int32_t)   = nullptr;
+static int32_t (*_AnoSDKIoctlOld)(int32_t, const void*, int32_t)= nullptr;
+static int32_t (*_AnoSDKOnRecvData)(const char*, int32_t)        = nullptr;
+static int32_t (*_AnoSDKOnRecvSignature)(const char*, int32_t)  = nullptr;
+
+static int32_t new_AnoSDKInit(const void*, int32_t)              { return 0; }
+static int32_t new_AnoSDKInitEx(const void*, int32_t)            { return 0; }
+static int32_t new_AnoSDKGetReportData(char*, int32_t)           { return 0; }
+static int32_t new_AnoSDKGetReportData2(char*, int32_t)          { return 0; }
+static int32_t new_AnoSDKGetReportData3(char*, int32_t)          { return 0; }
+static int32_t new_AnoSDKGetReportData4(char*, int32_t)          { return 0; }
+static int32_t new_AnoSDKDelReportData(char*, int32_t)           { return 0; }
+static int32_t new_AnoSDKDelReportData3(char*, int32_t)          { return 0; }
+static int32_t new_AnoSDKDelReportData4(char*, int32_t)          { return 0; }
+static int32_t new_AnoSDKIoctl(int32_t, const void*, int32_t)   { return 0; }
+static int32_t new_AnoSDKIoctlOld(int32_t, const void*, int32_t){ return 0; }
+static int32_t new_AnoSDKOnRecvData(const char*, int32_t)        { return 0; }
+static int32_t new_AnoSDKOnRecvSignature(const char*, int32_t)  { return 0; }
+
+// ── libanort.so (transport layer) ────────────────────────────────────────────
+static int32_t (*_AnortIoctl)(int32_t, const void*, int32_t)    = nullptr;
+static int32_t (*_AnortIoctlOld)(int32_t, const void*, int32_t) = nullptr;
+static int32_t new_AnortIoctl(int32_t, const void*, int32_t)    { return 0; }
+static int32_t new_AnortIoctlOld(int32_t, const void*, int32_t) { return 0; }
+
+// ── /proc/self/maps filter ────────────────────────────────────────────────────
+// Hook fopen so that any maps-file read returns a version with our .so stripped.
+static const char* g_ownSoBasename = nullptr;
+static FILE* (*orig_fopen)(const char*, const char*) = nullptr;
+static FILE* hook_fopen(const char* path, const char* mode) {
+    FILE* f = orig_fopen(path, mode);
+    if (!f || !path || !g_ownSoBasename) return f;
+    // Only intercept /proc/*/maps reads
+    if (!strstr(path, "/proc/") || !strstr(path, "maps")) return f;
+    FILE* tmp = tmpfile();
+    if (!tmp) return f;
+    char line[512];
+    while (fgets(line, sizeof(line), f))
+        if (!strstr(line, g_ownSoBasename))
+            fwrite(line, 1, strlen(line), tmp);
+    fclose(f);
+    rewind(tmp);
+    return tmp;
+}
+
+// ── Atomic hook applier (idempotent – safe to call multiple times) ────────────
+#define _HOOK_ONCE(h, sym, newf, orig) do { \
+    void* _p = dlsym(h, sym); \
+    if (_p && !(orig)) DobbyHook(_p, (void*)(newf), (void**)&(orig)); \
+} while(0)
+
+static std::once_flag g_anogsOnce, g_anortOnce;
+
+static void apply_anogs_hooks() {
+    void* h = dlopen("libanogs.so", RTLD_NOLOAD);
+    if (!h) return;
+    // Block init first so monitoring threads never start
+    _HOOK_ONCE(h, "AnoSDKInit",            new_AnoSDKInit,            _AnoSDKInit);
+    _HOOK_ONCE(h, "AnoSDKInitEx",          new_AnoSDKInitEx,          _AnoSDKInitEx);
+    _HOOK_ONCE(h, "AnoSDKGetReportData",   new_AnoSDKGetReportData,   _AnoSDKGetReportData);
+    _HOOK_ONCE(h, "AnoSDKGetReportData2",  new_AnoSDKGetReportData2,  _AnoSDKGetReportData2);
+    _HOOK_ONCE(h, "AnoSDKGetReportData3",  new_AnoSDKGetReportData3,  _AnoSDKGetReportData3);
+    _HOOK_ONCE(h, "AnoSDKGetReportData4",  new_AnoSDKGetReportData4,  _AnoSDKGetReportData4);
+    _HOOK_ONCE(h, "AnoSDKDelReportData",   new_AnoSDKDelReportData,   _AnoSDKDelReportData);
+    _HOOK_ONCE(h, "AnoSDKDelReportData3",  new_AnoSDKDelReportData3,  _AnoSDKDelReportData3);
+    _HOOK_ONCE(h, "AnoSDKDelReportData4",  new_AnoSDKDelReportData4,  _AnoSDKDelReportData4);
+    _HOOK_ONCE(h, "AnoSDKIoctl",           new_AnoSDKIoctl,           _AnoSDKIoctl);
+    _HOOK_ONCE(h, "AnoSDKIoctlOld",        new_AnoSDKIoctlOld,        _AnoSDKIoctlOld);
+    _HOOK_ONCE(h, "AnoSDKOnRecvData",      new_AnoSDKOnRecvData,      _AnoSDKOnRecvData);
+    _HOOK_ONCE(h, "AnoSDKOnRecvSignature", new_AnoSDKOnRecvSignature, _AnoSDKOnRecvSignature);
+    // Do NOT dlclose — Dobby trampolines point into this library
+}
+
+static void apply_anort_hooks() {
+    void* h = dlopen("libanort.so", RTLD_NOLOAD);
+    if (!h) return;
+    _HOOK_ONCE(h, "AnoSDKIoctl",    new_AnortIoctl,    _AnortIoctl);
+    _HOOK_ONCE(h, "AnoSDKIoctlOld", new_AnortIoctlOld, _AnortIoctlOld);
+    // Do NOT dlclose
+}
+
+// ── dlopen hook – catch library loads and apply hooks immediately ─────────────
+// Guarantees AnoSDKInit is hooked BEFORE the game can call it.
+static void* (*orig_dlopen)(const char*, int) = nullptr;
+static void* hook_dlopen(const char* filename, int flags) {
+    void* handle = orig_dlopen(filename, flags);
+    if (handle && filename) {
+        if (strstr(filename, "libanogs"))
+            std::call_once(g_anogsOnce, apply_anogs_hooks);
+        else if (strstr(filename, "libanort"))
+            std::call_once(g_anortOnce, apply_anort_hooks);
+    }
+    return handle;
+}
+
+// Called from lib_main() immediately at .so load time — before any game code runs.
+static void setup_early_bypass() {
+    // Capture our own basename once (used by the /proc/maps filter)
+    Dl_info di;
+    if (dladdr((void*)setup_early_bypass, &di) && di.dli_fname) {
+        const char* sl = strrchr(di.dli_fname, '/');
+        g_ownSoBasename = sl ? sl + 1 : di.dli_fname;
+    }
+
+    // Hook fopen to strip our .so from /proc/self/maps reads
+    void* fopen_addr = DobbySymbolResolver("libc.so", "fopen");
+    if (fopen_addr) DobbyHook(fopen_addr, (void*)hook_fopen, (void**)&orig_fopen);
+
+    // Hook dlopen to intercept future library loads
+    void* dlopen_addr = DobbySymbolResolver("libdl.so", "dlopen");
+    if (!dlopen_addr) dlopen_addr = DobbySymbolResolver("libc.so", "dlopen");
+    if (dlopen_addr) DobbyHook(dlopen_addr, (void*)hook_dlopen, (void**)&orig_dlopen);
+
+    // In case the libs are already mapped (e.g. pre-loaded by the system)
+    apply_anogs_hooks();
+    apply_anort_hooks();
+}
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Auto-resolve a libGameCore.so function by an internal string it references.
@@ -1004,20 +1137,11 @@ void hack_injec() {
     if (sz) set_ZoomRateFromAge = (set_ZoomRateFromAge_t)sz;
   }
 
-  // ── AnoSDK bypass: hook report-data functions so no reports are uploaded ──
-  void* anogs = dlopen("libanogs.so", RTLD_NOLOAD);
-  if (anogs) {
-    void* fn;
-    fn = dlsym(anogs, "AnoSDKGetReportData");
-    if (fn) DobbyHook(fn, (void*)new_AnoSDKGetReportData, (void**)&_AnoSDKGetReportData);
-    fn = dlsym(anogs, "AnoSDKGetReportData2");
-    if (fn) DobbyHook(fn, (void*)new_AnoSDKGetReportData2, (void**)&_AnoSDKGetReportData2);
-    fn = dlsym(anogs, "AnoSDKGetReportData3");
-    if (fn) DobbyHook(fn, (void*)new_AnoSDKGetReportData3, (void**)&_AnoSDKGetReportData3);
-    fn = dlsym(anogs, "AnoSDKGetReportData4");
-    if (fn) DobbyHook(fn, (void*)new_AnoSDKGetReportData4, (void**)&_AnoSDKGetReportData4);
-    // Do NOT dlclose — hooks into libanogs.so must remain valid
-  }
+  // ── AnoSDK bypass: belt-and-suspenders re-apply in case dlopen hook missed ──
+  // Primary bypass is setup_early_bypass() called in lib_main(). This catches any
+  // libs that were already loaded before our dlopen hook was installed.
+  apply_anogs_hooks();
+  apply_anort_hooks();
 
   ImGuiOK = true;
 }
@@ -1040,6 +1164,10 @@ JNIEXPORT jint JNICALL JNI_OnLoad(JavaVM *vm, void * reserved) {
 
 __attribute__((constructor))
 void lib_main() {
+  // Apply AnoSDK bypass + /proc/maps filter immediately at .so load time,
+  // before any game code runs, so AnoSDKInit is hooked before it can be called.
+  setup_early_bypass();
+
   std::thread thread_hack(hack_thread, get_pid_by_name(packageName));
   thread_hack.detach();
 }
