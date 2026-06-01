@@ -874,26 +874,6 @@ static int32_t (*_AnortIoctlOld)(int32_t, const void*, int32_t) = nullptr;
 static int32_t new_AnortIoctl(int32_t, const void*, int32_t)    { return 0; }
 static int32_t new_AnortIoctlOld(int32_t, const void*, int32_t) { return 0; }
 
-// ── /proc/self/maps filter ────────────────────────────────────────────────────
-// Hook fopen so that any maps-file read returns a version with our .so stripped.
-static const char* g_ownSoBasename = nullptr;
-static FILE* (*orig_fopen)(const char*, const char*) = nullptr;
-static FILE* hook_fopen(const char* path, const char* mode) {
-    FILE* f = orig_fopen(path, mode);
-    if (!f || !path || !g_ownSoBasename) return f;
-    // Only intercept /proc/*/maps reads
-    if (!strstr(path, "/proc/") || !strstr(path, "maps")) return f;
-    FILE* tmp = tmpfile();
-    if (!tmp) return f;
-    char line[512];
-    while (fgets(line, sizeof(line), f))
-        if (!strstr(line, g_ownSoBasename))
-            fwrite(line, 1, strlen(line), tmp);
-    fclose(f);
-    rewind(tmp);
-    return tmp;
-}
-
 // ── Atomic hook applier (idempotent – safe to call multiple times) ────────────
 #define _HOOK_ONCE(h, sym, newf, orig) do { \
     void* _p = dlsym(h, sym); \
@@ -946,18 +926,11 @@ static void* hook_dlopen(const char* filename, int flags) {
 
 // Called from lib_main() immediately at .so load time — before any game code runs.
 static void setup_early_bypass() {
-    // Capture our own basename once (used by the /proc/maps filter)
-    Dl_info di;
-    if (dladdr((void*)setup_early_bypass, &di) && di.dli_fname) {
-        const char* sl = strrchr(di.dli_fname, '/');
-        g_ownSoBasename = sl ? sl + 1 : di.dli_fname;
-    }
-
-    // Hook fopen to strip our .so from /proc/self/maps reads
-    void* fopen_addr = DobbySymbolResolver("libc.so", "fopen");
-    if (fopen_addr) DobbyHook(fopen_addr, (void*)hook_fopen, (void**)&orig_fopen);
-
-    // Hook dlopen to intercept future library loads
+    // Hook dlopen to intercept future library loads and apply AnoSDK hooks before
+    // AnoSDKInit can run.  fopen is NOT hooked here — hooking fopen interferes with
+    // the game's own Escher/IL2cpp runtime resolver reading /proc/self/maps, which
+    // causes DT_FindByKey to resolve to null and crash in UnityMain.  The AnoSDK
+    // function hooks (Init/Ioctl/GetReportData) are sufficient to prevent detection.
     void* dlopen_addr = DobbySymbolResolver("libdl.so", "dlopen");
     if (!dlopen_addr) dlopen_addr = DobbySymbolResolver("libc.so", "dlopen");
     if (dlopen_addr) DobbyHook(dlopen_addr, (void*)hook_dlopen, (void**)&orig_dlopen);
