@@ -825,9 +825,11 @@ bool is_current_process(const char* target_name) {
 // ── AnoSDK anti-cheat bypass ─────────────────────────────────────────────────
 // Intercept GetReportData variants so the SDK has nothing to upload.
 static int32_t (*_AnoSDKGetReportData)(char* buf, int32_t len)  = nullptr;
+static int32_t (*_AnoSDKGetReportData2)(char* buf, int32_t len) = nullptr;
 static int32_t (*_AnoSDKGetReportData3)(char* buf, int32_t len) = nullptr;
 static int32_t (*_AnoSDKGetReportData4)(char* buf, int32_t len) = nullptr;
 static int32_t new_AnoSDKGetReportData(char* buf, int32_t len)  { return 0; }
+static int32_t new_AnoSDKGetReportData2(char* buf, int32_t len) { return 0; }
 static int32_t new_AnoSDKGetReportData3(char* buf, int32_t len) { return 0; }
 static int32_t new_AnoSDKGetReportData4(char* buf, int32_t len) { return 0; }
 
@@ -925,16 +927,16 @@ void hack_injec() {
   if (mapAddr) DobbyHook(mapAddr, (void*)new_ActorForceSetVisible, (void**)&_ActorForceSetVisible);
 
   // SGC::CheckVisible – all visibility queries return true
-  mapAddr = Il2CppGetMethodOffset("Scripts.GameCore.dll", "", "SGC", "CheckVisible", 3);
+  mapAddr = Il2CppGetMethodOffset("Scripts.GameCore.dll", "SGC", "nsPathfinding", "CheckVisible", 3);
   if (mapAddr) DobbyHook(mapAddr, (void*)new_CheckVisible, (void**)&_CheckVisible);
 
   // ── Layer 4: position sync for out-of-sight actors ───────────────────────
   // 4a: cache real position/direction from every movement packet we see
-  mapAddr = Il2CppGetMethodOffset("Scripts.GameCore.dll", "", "SGC", "NtfActorMovementData", 1);
+  mapAddr = Il2CppGetMethodOffset("Scripts.GameCore.dll", "SGC", "nsPathfinding", "NtfActorMovementData", 1);
   if (mapAddr) DobbyHook(mapAddr, (void*)new_NtfActorMovementData, (void**)&_NtfActorMovementData);
 
   // 4b: cache isMoving flag
-  mapAddr = Il2CppGetMethodOffset("Scripts.GameCore.dll", "", "SGC", "NtfActorMoveState", 2);
+  mapAddr = Il2CppGetMethodOffset("Scripts.GameCore.dll", "SGC", "nsPathfinding", "NtfActorMoveState", 2);
   if (mapAddr) DobbyHook(mapAddr, (void*)new_NtfActorMoveState, (void**)&_NtfActorMoveState);
 
   // 4c: Interpolation() – Unity render-loop path (fires after Layer 7 keeps actor in lists)
@@ -954,7 +956,7 @@ void hack_injec() {
   }
 
   // ── Layer 5: HP sync for OOS actors ─────────────────────────────────────
-  mapAddr = Il2CppGetMethodOffset("Scripts.GameCore.dll", "", "SGC", "OnActorCurHpChange", 3);
+  mapAddr = Il2CppGetMethodOffset("Scripts.GameCore.dll", "SGC", "nsPathfinding", "OnActorCurHpChange", 3);
   if (mapAddr) DobbyHook(mapAddr, (void*)new_OnActorCurHpChange, (void**)&_OnActorCurHpChange);
 
   {
@@ -964,7 +966,7 @@ void hack_injec() {
   }
 
   // ── Layer 6: keep HP/buff callbacks alive (skip UnregisterEvt) ───────────
-  mapAddr = Il2CppGetMethodOffset("Scripts.GameCore.dll", "", "SGC", "OnActorLeaveView_UnregisterEvt", 1);
+  mapAddr = Il2CppGetMethodOffset("Scripts.GameCore.dll", "SGC", "nsPathfinding", "OnActorLeaveView_UnregisterEvt", 1);
   if (mapAddr) DobbyHook(mapAddr, (void*)new_OnActorLeaveViewUnregEvt, (void**)&_OnActorLeaveViewUnregEvt);
 
   // ── Layer 7: skip ActorManager::OnActorLeaveView (instance method) ──────
@@ -1008,11 +1010,13 @@ void hack_injec() {
     void* fn;
     fn = dlsym(anogs, "AnoSDKGetReportData");
     if (fn) DobbyHook(fn, (void*)new_AnoSDKGetReportData, (void**)&_AnoSDKGetReportData);
+    fn = dlsym(anogs, "AnoSDKGetReportData2");
+    if (fn) DobbyHook(fn, (void*)new_AnoSDKGetReportData2, (void**)&_AnoSDKGetReportData2);
     fn = dlsym(anogs, "AnoSDKGetReportData3");
     if (fn) DobbyHook(fn, (void*)new_AnoSDKGetReportData3, (void**)&_AnoSDKGetReportData3);
     fn = dlsym(anogs, "AnoSDKGetReportData4");
     if (fn) DobbyHook(fn, (void*)new_AnoSDKGetReportData4, (void**)&_AnoSDKGetReportData4);
-    dlclose(anogs);
+    // Do NOT dlclose — hooks into libanogs.so must remain valid
   }
 
   ImGuiOK = true;
