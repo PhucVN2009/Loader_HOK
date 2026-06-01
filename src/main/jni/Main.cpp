@@ -11,6 +11,7 @@
 #include <thread>
 #include <vector>
 #include <fstream>
+#include <mutex>
 
 // --- Android / System / Dynamic loading ---
 #include <android/log.h>
@@ -966,19 +967,27 @@ static void setup_early_bypass() {
     apply_anort_hooks();
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
-// Auto-resolve a libGameCore.so function by an internal string it references.
-//   1. find the string in the module,
-//   2. scan exec segments for the ADRP+ADD pair that loads that string,
-//   3. walk back to the function prologue (sub sp, sp, #imm).
-// Survives game updates (string identifiers are stable) — no manual offset.
-// ─────────────────────────────────────────────────────────────────────────────
-static uintptr_t ResolveGCFuncByString(const char* lib, const char* str) {
-  auto maps = KittyMemory::getMapsByName(lib);
-  if (maps.empty()) return 0;
+// =============================================================================
+// ResolveGCFuncByString — auto-update resolver for libGameCore.so functions
+//
+// Algorithm (ARM64):
+//   1. Find the target string in the library's readable segments.
+//   2. Scan executable segments for the ADRP + ADD (or ADRP + LDR) pair that
+//      computes exactly that string's address.
+//   3. Walk backwards from that load site to the nearest function prologue
+//      (SUB SP, SP, #imm  or  STP X29, X30, [SP, #-imm]!).
+//
+// Two stable strings are tried in order for IsCellVisible so that the hook
+// survives even if the game strips one of them in a future build:
+//   Primary   → "IsSurfaceCellVisibleConsiderNeighbor"  (function name, assert)
+//   Fallback  → "GameCore/BattleSys/Horizon/GameGridFow.cpp"  (source path)
+// No hardcoded offset is used — the resolver always finds the live address.
+// =============================================================================
+static uintptr_t ResolveByOneString(
+        const std::vector<ProcMap>& maps, const char* str) {
   size_t slen = strlen(str);
 
-  // 1. locate the string
+  // Step 1 – locate the string literal in any readable segment
   uintptr_t strAddr = 0;
   for (auto& m : maps) {
     if (!m.readable) continue;
@@ -987,30 +996,57 @@ static uintptr_t ResolveGCFuncByString(const char* lib, const char* str) {
   }
   if (!strAddr) return 0;
 
-  // 2. scan executable segments for ADRP(reg)+ADD(reg,#imm) == strAddr
-  uintptr_t lastPage[32]; bool has[32];
+  // Step 2 – scan executable segments for ADRP(Xd) + ADD(Xd, Xd, #imm12)
+  //          where the computed address equals strAddr.
+  uintptr_t lastPage[32] = {}; bool has[32] = {};
   for (auto& m : maps) {
     if (!m.executable) continue;
     for (int i = 0; i < 32; i++) has[i] = false;
     for (uintptr_t a = m.startAddress; a + 4 <= m.endAddress; a += 4) {
-      uint32_t w = *(uint32_t*)a;
-      if ((w & 0x9F000000) == 0x90000000) {            // ADRP Xd, imm
+      uint32_t w = *(const uint32_t*)a;
+      // ADRP Xd, label
+      if ((w & 0x9F000000) == 0x90000000) {
         int rd = w & 0x1f;
-        int64_t imm = (((w >> 5) & 0x7ffff) << 2) | ((w >> 29) & 3);
-        if (imm & (1 << 20)) imm -= (1 << 21);          // sign-extend 21-bit
+        int64_t imm = (((w >> 5) & 0x7ffffLL) << 2) | ((w >> 29) & 3);
+        if (imm & (1LL << 20)) imm -= (1LL << 21);
         lastPage[rd] = (a & ~0xfffULL) + (imm << 12);
         has[rd] = true;
-      } else if ((w & 0xFF800000) == 0x91000000) {      // ADD Xd, Xn, #imm12
-        int rn = (w >> 5) & 0x1f, imm12 = (w >> 10) & 0xfff;
+        continue;
+      }
+      // ADD Xd, Xn, #imm12  (sf=1, op=0, S=0, shift=0)
+      if ((w & 0xFF800000) == 0x91000000) {
+        int rd = w & 0x1f, rn = (w >> 5) & 0x1f;
+        uint32_t imm12 = (w >> 10) & 0xfff;
         if (has[rn] && (lastPage[rn] + imm12) == strAddr) {
-          // 3. walk back to prologue: sub sp, sp, #imm
-          for (uintptr_t b = a; b > a - 0x1200 && b >= m.startAddress; b -= 4) {
-            uint32_t pw = *(uint32_t*)b;
-            if ((pw & 0xFFC003FF) == 0xD10003FF) return b;  // sub sp, sp, #imm
+          // Step 3 – walk back to the nearest function prologue
+          for (uintptr_t b = a; b > a - 0x1400 && b >= m.startAddress; b -= 4) {
+            uint32_t pw = *(const uint32_t*)b;
+            // SUB SP, SP, #imm  (most common C prologue)
+            if ((pw & 0xFFC003FF) == 0xD10003FF) return b;
+            // STP X29, X30, [SP, #-imm]!  (frame-pointer prologue)
+            if ((pw & 0xFFC07FFF) == 0xA9807BFD) return b;
           }
         }
+        continue;
       }
+      // If a non-ADRP, non-ADD instruction uses a register we were tracking,
+      // and it could clobber it, invalidate — conservative but safe.
+      int rd = w & 0x1f;
+      if (rd < 32 && (w >> 29) != 0b100) has[rd] = false;
     }
+  }
+  return 0;
+}
+
+// Try each candidate string in turn; return the first successful resolution.
+static uintptr_t ResolveGCFuncByStrings(
+        const char* lib,
+        std::initializer_list<const char*> candidates) {
+  auto maps = KittyMemory::getMapsByName(lib);
+  if (maps.empty()) return 0;
+  for (const char* s : candidates) {
+    uintptr_t r = ResolveByOneString(maps, s);
+    if (r) { LOGD("[AutoUpdate] resolved via \"%s\" @ %p", s, (void*)r); return r; }
   }
   return 0;
 }
@@ -1041,91 +1077,29 @@ void hack_injec() {
   skAddr = Il2CppGetMethodOffset("Scripts.System.dll", "Assets.Scripts.GameSystem", "CSelectHeroFormLogic", "WearHeroSkin", 2);
   if (skAddr) DobbyHook(skAddr, (void*)new_WearHeroSkin, (void**)&_WearHeroSkin);
 
-  // ── Map Hack hooks (FogOfWar – Scripts.GameCore.dll, global namespace) ────
-  void* mapAddr;
-  mapAddr = Il2CppGetMethodOffset("Scripts.GameCore.dll", "", "FogOfWar", "IsEnable", 0);
-  if (mapAddr) DobbyHook(mapAddr, (void*)new_FowIsEnable, (void**)&_FowIsEnable);
-
-  mapAddr = Il2CppGetMethodOffset("Scripts.GameCore.dll", "", "FogOfWar", "get_enable", 0);
-  if (mapAddr) DobbyHook(mapAddr, (void*)new_FowGetEnable, (void**)&_FowGetEnable);
-
-  mapAddr = Il2CppGetMethodOffset("Scripts.GameCore.dll", "", "FogOfWar", "get_EnableRender", 0);
-  if (mapAddr) DobbyHook(mapAddr, (void*)new_FowGetEnableRender, (void**)&_FowGetEnableRender);
-
-  // ActorLinker::SetVisible + ForceSetVisible – intercept server hide packets
-  mapAddr = Il2CppGetMethodOffset("Scripts.GameCore.dll", "Assets.Scripts.GameLogic", "ActorLinker", "SetVisible", 2);
-  if (mapAddr) DobbyHook(mapAddr, (void*)new_ActorSetVisible, (void**)&_ActorSetVisible);
-
-  mapAddr = Il2CppGetMethodOffset("Scripts.GameCore.dll", "Assets.Scripts.GameLogic", "ActorLinker", "ForceSetVisible", 2);
-  if (mapAddr) DobbyHook(mapAddr, (void*)new_ActorForceSetVisible, (void**)&_ActorForceSetVisible);
-
-  // SGC::CheckVisible – all visibility queries return true
-  mapAddr = Il2CppGetMethodOffset("Scripts.GameCore.dll", "SGC", "nsPathfinding", "CheckVisible", 3);
-  if (mapAddr) DobbyHook(mapAddr, (void*)new_CheckVisible, (void**)&_CheckVisible);
-
-  // ── Layer 4: position sync for out-of-sight actors ───────────────────────
-  // 4a: cache real position/direction from every movement packet we see
-  mapAddr = Il2CppGetMethodOffset("Scripts.GameCore.dll", "SGC", "nsPathfinding", "NtfActorMovementData", 1);
-  if (mapAddr) DobbyHook(mapAddr, (void*)new_NtfActorMovementData, (void**)&_NtfActorMovementData);
-
-  // 4b: cache isMoving flag
-  mapAddr = Il2CppGetMethodOffset("Scripts.GameCore.dll", "SGC", "nsPathfinding", "NtfActorMoveState", 2);
-  if (mapAddr) DobbyHook(mapAddr, (void*)new_NtfActorMoveState, (void**)&_NtfActorMoveState);
-
-  // 4c: Interpolation() – Unity render-loop path (fires after Layer 7 keeps actor in lists)
-  mapAddr = Il2CppGetMethodOffset("Scripts.GameCore.dll", "Assets.Scripts.GameLogic", "ActorLinker", "Interpolation", 0);
-  if (mapAddr) DobbyHook(mapAddr, (void*)new_Interpolation, (void**)&_Interpolation);
-
-  // 4d: HOK_OnInterpolation() – SGW engine path, fires for ALL actors unconditionally.
-  //     Dual-hooks position sync: if actor was removed from ActorManager lists before
-  //     Layer 7's skip takes effect this frame, this path still catches it.
-  mapAddr = Il2CppGetMethodOffset("Scripts.GameCore.dll", "Assets.Scripts.GameLogic", "ActorLinker", "HOK_OnInterpolation", 0);
-  if (mapAddr) DobbyHook(mapAddr, (void*)new_HOKOnInterpolation, (void**)&_HOKOnInterpolation);
-
-  // Transform write helper: UnityEngine.Transform::set_position_Injected(ref Vector3)
-  {
-    void* tp = Il2CppGetMethodOffset("UnityEngine.CoreModule.dll", "UnityEngine", "Transform", "set_position_Injected", 1);
-    if (tp) _TransformSetPosInj = (void (*)(void*, float*))tp;
-  }
-
-  // ── Layer 5: HP sync for OOS actors ─────────────────────────────────────
-  mapAddr = Il2CppGetMethodOffset("Scripts.GameCore.dll", "SGC", "nsPathfinding", "OnActorCurHpChange", 3);
-  if (mapAddr) DobbyHook(mapAddr, (void*)new_OnActorCurHpChange, (void**)&_OnActorCurHpChange);
-
-  {
-    void* fn = Il2CppGetMethodOffset("Scripts.GameCore.dll", "Assets.Scripts.GameLogic",
-                                      "ValueLinkerComponent", "SetActorHp", 2);
-    if (fn) _SetActorHp = (void (*)(void*, int32_t, int32_t))fn;
-  }
-
-  // ── Layer 6: keep HP/buff callbacks alive (skip UnregisterEvt) ───────────
-  mapAddr = Il2CppGetMethodOffset("Scripts.GameCore.dll", "SGC", "nsPathfinding", "OnActorLeaveView_UnregisterEvt", 1);
-  if (mapAddr) DobbyHook(mapAddr, (void*)new_OnActorLeaveViewUnregEvt, (void**)&_OnActorLeaveViewUnregEvt);
-
-  // ── Layer 7: skip ActorManager::OnActorLeaveView (instance method) ──────
-  // SGC::OnActorLeaveView is left to run normally so actor.SetVisible(false)
-  // still fires → Layer-2 hook captures it → g_oosSet populated for Layers 4c/5.
-  // Only the inner ActorManager::OnActorLeaveView is suppressed so the actor
-  // stays in HeroActors/SoldierActors/... → ActorManager::Interpolation()
-  // still iterates it every frame → Layer 4c fires → positions sync.
-  mapAddr = Il2CppGetMethodOffset("Scripts.GameCore.dll", "Assets.Scripts.GameLogic", "ActorManager", "OnActorLeaveView", 2);
-  if (mapAddr) DobbyHook(mapAddr, (void*)new_ActorMgrLeaveView, (void**)&_ActorMgrLeaveView);
-
-  // ── NATIVE libGameCore.so: Horizon fog – GameGridFow::IsSurfaceCellVisibleConsiderNeighbor ──
-  // AUTO-UPDATE: resolve the function at runtime by the internal string it
-  // references, so it survives game updates (no manual offset). Falls back to the
-  // known static offset for this build if the scan fails.
+  // ── Map Hack: GameGridFow::IsSurfaceCellVisibleConsiderNeighbor ─────────────
+  // Single native hook in libGameCore.so — no IL2cpp hooks needed.
+  // Auto-update: resolved at runtime from stable string references inside the
+  // function; survives recompiles and version bumps without any manual offset.
   {
     ProcMap gcMap = KittyMemory::getLibraryBaseMap("libGameCore.so");
-    for (int i = 0; i < 30 && !gcMap.isValid(); i++) { sleep(1); gcMap = KittyMemory::getLibraryBaseMap("libGameCore.so"); }
+    for (int i = 0; i < 30 && !gcMap.isValid(); i++) {
+      sleep(1);
+      gcMap = KittyMemory::getLibraryBaseMap("libGameCore.so");
+    }
     if (gcMap.isValid()) {
-      uintptr_t fn = ResolveGCFuncByString("libGameCore.so", "IsSurfaceCellVisibleConsiderNeighbor");
-      const char* how = "auto";
-      if (!fn) { fn = (uintptr_t)gcMap.startAddress + 0x34839EC; how = "fallback-offset"; }
-      DobbyHook((void*)fn, (void*)new_GC_IsCellVisible, (void**)&_GC_IsCellVisible);
-      LOGD("libGameCore.so base=%p, IsCellVisible(%s) hooked @ %p", (void*)gcMap.startAddress, how, (void*)fn);
+      uintptr_t fn = ResolveGCFuncByStrings("libGameCore.so", {
+          "IsSurfaceCellVisibleConsiderNeighbor",          // primary   (function name in assert)
+          "GameCore/BattleSys/Horizon/GameGridFow.cpp",    // secondary (source path in assert)
+      });
+      if (fn) {
+        DobbyHook((void*)fn, (void*)new_GC_IsCellVisible, (void**)&_GC_IsCellVisible);
+        LOGD("[MapHack] IsCellVisible hooked @ offset 0x%lx", fn - (uintptr_t)gcMap.startAddress);
+      } else {
+        LOGD("[MapHack] IsCellVisible: auto-resolve failed, map hack disabled");
+      }
     } else {
-      LOGD("libGameCore.so not found - native fow hook skipped");
+      LOGD("[MapHack] libGameCore.so not found");
     }
   }
 
