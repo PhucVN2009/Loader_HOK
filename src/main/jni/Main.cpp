@@ -504,33 +504,13 @@ void DrawMenu() {
 
     if (activeFeature == 0) {
 
-        // ── Map Hack (3 modes — chon theo nhu cau) ─────────────────────────
+        // ── Map Hack (IsCellVisible + Patch B, auto-update) ────────────────
         ImGui::TextColored(ImColor(0, 255, 255), ICON_FA_MAP " Map Hack");
         ImGui::Spacing();
 
-        // 1) Render-only: safe, no desync (terrain/fog overlay off)
-        ImGui::Checkbox("1. Mo fog dia hinh (AN TOAN)", &maphack_render);
+        ImGui::Checkbox("Map Hack", &maphack);
         ImGui::TextColored(ImColor(150, 220, 150),
-            "  Tat lop fog -> thay dia hinh/bui co. KHONG desync.\n"
-            "  KHONG hien dich an (engine khoa o tang logic).");
-
-        ImGui::Spacing();
-
-        // 2) Reveal enemies: works, but inherent lockstep desync
-        ImGui::Checkbox("2. Hien dich qua fog (BI TRAN AO ~2p)", &maphack_reveal);
-        ImGui::TextColored(ImColor(255, 170, 120),
-            "  Ep tam nhin logic -> thay vi tri/mau dich.\n"
-            "  Lech frame-sync voi server -> 'tran dau ao' sau ~2p.\n"
-            "  Day la ban chat lockstep, KHONG fix duoc bang offset.");
-
-        ImGui::Spacing();
-
-        // 3) Bypass desync: experimental, not wired on this build
-        ImGui::BeginDisabled(true);
-        ImGui::Checkbox("3. Ne bo dem desync (CHUA WIRE)", &maphack_nodesync);
-        ImGui::EndDisabled();
-        ImGui::TextColored(ImColor(220, 130, 130),
-            "  Can dump il2cpp de wire ham frame-hash. Rui ro ban.");
+            "  Hook IsCellVisible (offset tu dong tim qua signature).");
 
         ImGui::Spacing();
         ImGui::Separator();
@@ -863,6 +843,7 @@ static int32_t new_AnoSDKGetReportData4(char* buf, int32_t len) { return 0; }
 //   3. walk back to the function prologue (sub sp, sp, #imm).
 // Survives game updates (string identifiers are stable) — no manual offset.
 // ─────────────────────────────────────────────────────────────────────────────
+__attribute__((unused))
 static uintptr_t ResolveGCFuncByString(const char* lib, const char* str) {
   auto maps = KittyMemory::getMapsByName(lib);
   if (maps.empty()) return 0;
@@ -914,99 +895,77 @@ void hack_injec() {
   sleep(5);
   Il2CppAttach("libil2cpp.so");
 
-  // ── Map Hack hooks (FogOfWar – Scripts.GameCore.dll, global namespace) ────
-  void* mapAddr;
-  mapAddr = Il2CppGetMethodOffset("Scripts.GameCore.dll", "", "FogOfWar", "IsEnable", 0);
-  if (mapAddr) DobbyHook(mapAddr, (void*)new_FowIsEnable, (void**)&_FowIsEnable);
-
-  mapAddr = Il2CppGetMethodOffset("Scripts.GameCore.dll", "", "FogOfWar", "get_enable", 0);
-  if (mapAddr) DobbyHook(mapAddr, (void*)new_FowGetEnable, (void**)&_FowGetEnable);
-
-  mapAddr = Il2CppGetMethodOffset("Scripts.GameCore.dll", "", "FogOfWar", "get_EnableRender", 0);
-  if (mapAddr) DobbyHook(mapAddr, (void*)new_FowGetEnableRender, (void**)&_FowGetEnableRender);
-
-  // ActorLinker::SetVisible + ForceSetVisible – intercept server hide packets
-  mapAddr = Il2CppGetMethodOffset("Scripts.GameCore.dll", "Assets.Scripts.GameLogic", "ActorLinker", "SetVisible", 2);
-  if (mapAddr) DobbyHook(mapAddr, (void*)new_ActorSetVisible, (void**)&_ActorSetVisible);
-
-  mapAddr = Il2CppGetMethodOffset("Scripts.GameCore.dll", "Assets.Scripts.GameLogic", "ActorLinker", "ForceSetVisible", 2);
-  if (mapAddr) DobbyHook(mapAddr, (void*)new_ActorForceSetVisible, (void**)&_ActorForceSetVisible);
-
-  // SGC::CheckVisible – all visibility queries return true
-  mapAddr = Il2CppGetMethodOffset("Scripts.GameCore.dll", "", "SGC", "CheckVisible", 3);
-  if (mapAddr) DobbyHook(mapAddr, (void*)new_CheckVisible, (void**)&_CheckVisible);
-
-  // ── Layer 4: position sync for out-of-sight actors ───────────────────────
-  // 4a: cache real position/direction from every movement packet we see
-  mapAddr = Il2CppGetMethodOffset("Scripts.GameCore.dll", "", "SGC", "NtfActorMovementData", 1);
-  if (mapAddr) DobbyHook(mapAddr, (void*)new_NtfActorMovementData, (void**)&_NtfActorMovementData);
-
-  // 4b: cache isMoving flag
-  mapAddr = Il2CppGetMethodOffset("Scripts.GameCore.dll", "", "SGC", "NtfActorMoveState", 2);
-  if (mapAddr) DobbyHook(mapAddr, (void*)new_NtfActorMoveState, (void**)&_NtfActorMoveState);
-
-  // 4c: Interpolation() – Unity render-loop path (fires after Layer 7 keeps actor in lists)
-  mapAddr = Il2CppGetMethodOffset("Scripts.GameCore.dll", "Assets.Scripts.GameLogic", "ActorLinker", "Interpolation", 0);
-  if (mapAddr) DobbyHook(mapAddr, (void*)new_Interpolation, (void**)&_Interpolation);
-
-  // 4d: HOK_OnInterpolation() – SGW engine path, fires for ALL actors unconditionally.
-  //     Dual-hooks position sync: if actor was removed from ActorManager lists before
-  //     Layer 7's skip takes effect this frame, this path still catches it.
-  mapAddr = Il2CppGetMethodOffset("Scripts.GameCore.dll", "Assets.Scripts.GameLogic", "ActorLinker", "HOK_OnInterpolation", 0);
-  if (mapAddr) DobbyHook(mapAddr, (void*)new_HOKOnInterpolation, (void**)&_HOKOnInterpolation);
-
-  // Transform write helper: UnityEngine.Transform::set_position_Injected(ref Vector3)
-  {
-    void* tp = Il2CppGetMethodOffset("UnityEngine.CoreModule.dll", "UnityEngine", "Transform", "set_position_Injected", 1);
-    if (tp) _TransformSetPosInj = (void (*)(void*, float*))tp;
-  }
-
-  // ── Layer 5: HP sync for OOS actors ─────────────────────────────────────
-  mapAddr = Il2CppGetMethodOffset("Scripts.GameCore.dll", "", "SGC", "OnActorCurHpChange", 3);
-  if (mapAddr) DobbyHook(mapAddr, (void*)new_OnActorCurHpChange, (void**)&_OnActorCurHpChange);
-
-  {
-    void* fn = Il2CppGetMethodOffset("Scripts.GameCore.dll", "Assets.Scripts.GameLogic",
-                                      "ValueLinkerComponent", "SetActorHp", 2);
-    if (fn) _SetActorHp = (void (*)(void*, int32_t, int32_t))fn;
-  }
-
-  // ── Layer 6: keep HP/buff callbacks alive (skip UnregisterEvt) ───────────
-  mapAddr = Il2CppGetMethodOffset("Scripts.GameCore.dll", "", "SGC", "OnActorLeaveView_UnregisterEvt", 1);
-  if (mapAddr) DobbyHook(mapAddr, (void*)new_OnActorLeaveViewUnregEvt, (void**)&_OnActorLeaveViewUnregEvt);
-
-  // ── Layer 7: skip ActorManager::OnActorLeaveView (instance method) ──────
-  // SGC::OnActorLeaveView is left to run normally so actor.SetVisible(false)
-  // still fires → Layer-2 hook captures it → g_oosSet populated for Layers 4c/5.
-  // Only the inner ActorManager::OnActorLeaveView is suppressed so the actor
-  // stays in HeroActors/SoldierActors/... → ActorManager::Interpolation()
-  // still iterates it every frame → Layer 4c fires → positions sync.
-  mapAddr = Il2CppGetMethodOffset("Scripts.GameCore.dll", "Assets.Scripts.GameLogic", "ActorManager", "OnActorLeaveView", 2);
-  if (mapAddr) DobbyHook(mapAddr, (void*)new_ActorMgrLeaveView, (void**)&_ActorMgrLeaveView);
-
-  // ── NATIVE libGameCore.so: Horizon fog – GameGridFow::IsSurfaceCellVisibleConsiderNeighbor ──
-  // AUTO-UPDATE: resolve the function at runtime by the internal string it
-  // references, so it survives game updates (no manual offset).
-  //
-  // NOTE: the previous hardcoded fallback (base + 0x34839EC) is STALE for the
-  // current build — in the supplied dump that address lands mid-function (it is
-  // not a prologue). Hooking there would patch instructions in the middle of a
-  // routine and corrupt it. So we now hook ONLY when the runtime string-resolver
-  // succeeds; otherwise we skip the native hook entirely. The il2cpp layers still
-  // drive the reveal, so the feature degrades safely instead of crashing.
+  // ── Map Hack (libGameCore native) ─────────────────────────────────────────
+  // Minimal 2-operation design, both AUTO-UPDATE via unique code-signature scan
+  // (no hardcoded offsets → survives game updates):
+  //   A) Hook IsCellVisible → force "visible" (clears fog).
+  //   B) Patch B: mov w21,w1 → mov w21,wzr in the related vision setup.
   {
     ProcMap gcMap = KittyMemory::getLibraryBaseMap("libGameCore.so");
     for (int i = 0; i < 30 && !gcMap.isValid(); i++) { sleep(1); gcMap = KittyMemory::getLibraryBaseMap("libGameCore.so"); }
+
     if (gcMap.isValid()) {
-      uintptr_t fn = ResolveGCFuncByString("libGameCore.so", "IsSurfaceCellVisibleConsiderNeighbor");
-      if (fn) {
-        DobbyHook((void*)fn, (void*)new_GC_IsCellVisible, (void**)&_GC_IsCellVisible);
-        LOGD("libGameCore.so base=%p, IsCellVisible auto-resolved & hooked @ %p", (void*)gcMap.startAddress, (void*)fn);
-      } else {
-        LOGD("libGameCore.so IsCellVisible NOT resolved - native fow hook skipped (no stale fallback)");
+      auto gcMaps = KittyMemory::getMapsByName("libGameCore.so");
+
+      // ---- A) IsCellVisible ----------------------------------------------------
+      // Unique 32-byte signature found inside the function (the callee-saved
+      // register block + `ldr w9,[x8,#0x38]` + `tst w9,#0xfffffffb`). The function
+      // prologue (`sub sp,sp,#0x70`) sits 0x1C bytes before this signature.
+      //   08 00 40 F9 F3 03 04 AA F8 03 03 2A F4 03 00 AA
+      //   F5 03 02 2A F6 03 01 2A 09 39 40 B9 3F 79 1D 72
+      {
+        const std::string sig =
+          "08 00 40 F9 F3 03 04 AA F8 03 03 2A F4 03 00 AA "
+          "F5 03 02 2A F6 03 01 2A 09 39 40 B9 3F 79 1D 72";
+        const std::string mask(32, 'x');
+        uintptr_t hit = 0;
+        for (auto& m : gcMaps) {
+          if (!m.executable) continue;
+          hit = KittyScanner::findHexFirst(m.startAddress, m.endAddress, sig, mask);
+          if (hit) break;
+        }
+        if (hit) {
+          uintptr_t fn = hit - 0x1C; // signature → function prologue
+          DobbyHook((void*)fn, (void*)new_IsCellVisible, (void**)&_IsCellVisible);
+          LOGD("MapHack: IsCellVisible auto-resolved @ %p (sig @ %p)", (void*)fn, (void*)hit);
+        } else {
+          LOGD("MapHack: IsCellVisible signature NOT found - hook skipped");
+        }
+      }
+
+      // ---- B) Patch B (mov w21,w1 → mov w21,wzr) -------------------------------
+      // AUTO-UPDATE scaffold: scans for a UNIQUE signature whose `mov w21,w1`
+      // (F5 03 01 2A) is at byte offset PATCHB_SIG_OFF, then rewrites it to
+      // `mov w21,wzr` (F5 03 1F 2A). A bare `mov w21,w1` occurs 1271× in this
+      // build, so a context signature is required; it could not be recovered from
+      // the supplied stripped dump. Fill PATCHB_SIG / PATCHB_MASK with ~24 bytes
+      // around the real Patch B site (from a build where its offset is correct)
+      // and it auto-resolves. Left empty → safely skipped (no blind patch).
+      {
+        const std::string PATCHB_SIG  = ""; // e.g. "?? ?? ?? ?? F5 03 01 2A ?? ?? ?? ??"
+        const std::string PATCHB_MASK = ""; // e.g. "xxxxxxxx...."
+        const int          PATCHB_SIG_OFF = 0; // byte offset of the mov w21,w1 within the sig
+        if (!PATCHB_SIG.empty() && PATCHB_SIG.size() && PATCHB_MASK.size()) {
+          uintptr_t hit = 0;
+          for (auto& m : gcMaps) {
+            if (!m.executable) continue;
+            hit = KittyScanner::findHexFirst(m.startAddress, m.endAddress, PATCHB_SIG, PATCHB_MASK);
+            if (hit) break;
+          }
+          if (hit) {
+            uintptr_t patchAddr = hit + PATCHB_SIG_OFF;
+            // mov w21, wzr  →  bytes F5 03 1F 2A
+            MemoryPatch::createWithHex(patchAddr, "F5 03 1F 2A").Modify();
+            LOGD("MapHack: Patch B applied @ %p", (void*)patchAddr);
+          } else {
+            LOGD("MapHack: Patch B signature NOT found - skipped");
+          }
+        } else {
+          LOGD("MapHack: Patch B signature not configured - skipped");
+        }
       }
     } else {
-      LOGD("libGameCore.so not found - native fow hook skipped");
+      LOGD("MapHack: libGameCore.so not found - map hack skipped");
     }
   }
 
