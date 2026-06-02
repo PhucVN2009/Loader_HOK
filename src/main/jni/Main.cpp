@@ -50,6 +50,7 @@
 #include "modskin.h"
 #include "modmap.h"
 #include "modcam.h"
+#include "modemoji.h"
 #include "imgui/Icon.h"
 #include "imgui/Iconcpp.h"
 #include "AutoUpdate/IL2CppSDKGenerator/Il2Cpp.h"
@@ -541,6 +542,14 @@ void DrawMenu() {
             ImGui::EndChild();
         }
 
+        // ── Spam Sticker ──────────────────────────────────────────────────
+        ImGui::Spacing();
+        ImGui::Separator();
+        ImGui::Spacing();
+
+        ImGui::Checkbox("Spam Sticker Minh", &SpamSticker_mine);
+        ImGui::Checkbox("Spam Sticker Nguoi Khac", &SpamSticker_other);
+
         // ── Map Hack ──────────────────────────────────────────────────────
         ImGui::Spacing();
         ImGui::Separator();
@@ -992,6 +1001,53 @@ void hack_injec() {
     } else {
       LOGD("libGameCore.so not found - native fow hook skipped");
     }
+  }
+
+  // ── Spam Sticker (EffectPlayComponent.LateUpdate + CBattleEmojiManager) ─────
+  {
+    void* addr;
+
+    // ActorLinker.IsHostPlayer – detect local actor inside the hook
+    addr = IL2Cpp::Il2CppGetMethodOffset(
+        OBFUSCATE("Project_d.dll"),
+        OBFUSCATE("Kyrios.Actor"),
+        OBFUSCATE("ActorLinker"),
+        OBFUSCATE("IsHostPlayer"), 0);
+    if (addr) ActorLinker_IsHostPlayer = (bool (*)(void*))addr;
+
+    // CBattleEmojiManager.GetInstance (Singleton)
+    addr = IL2Cpp::Il2CppGetMethodOffset(
+        OBFUSCATE("Project_d.dll"),
+        OBFUSCATE("Assets.Scripts.GameLogic"),
+        OBFUSCATE("CBattleEmojiManager"),
+        OBFUSCATE("GetInstance"), 0);
+    if (addr) _GetBattleEmojiMgr = (void* (*)())addr;
+
+    // CBattleEmojiManager.SendPlayBattleEmojiCmd(uint emojiId)
+    addr = IL2Cpp::Il2CppGetMethodOffset(
+        OBFUSCATE("Project_d.dll"),
+        OBFUSCATE("Assets.Scripts.GameLogic"),
+        OBFUSCATE("CBattleEmojiManager"),
+        OBFUSCATE("SendPlayBattleEmojiCmd"), 1);
+    if (addr) _SendPlayBattleEmojiCmd = (void (*)(void*, uint32_t))addr;
+
+    // SGW.PushPlayEmoji(uint playerId, uint emojiId) — client-side trigger for others
+    // SGW is in global namespace (""). DLL may differ from Project_d.dll depending
+    // on game version; update the first OBFUSCATE string if lookup returns null.
+    addr = IL2Cpp::Il2CppGetMethodOffset(
+        OBFUSCATE("Project_d.dll"),
+        OBFUSCATE(""),
+        OBFUSCATE("SGW"),
+        OBFUSCATE("PushPlayEmoji"), 2);
+    if (addr) _PushPlayEmoji = (void (*)(uint32_t, uint32_t))addr;
+
+    // Hook EffectPlayComponent.LateUpdate(int delta)
+    addr = IL2Cpp::Il2CppGetMethodOffset(
+        OBFUSCATE("Project_d.dll"),
+        OBFUSCATE("Assets.Scripts.GameLogic"),
+        OBFUSCATE("EffectPlayComponent"),
+        OBFUSCATE("LateUpdate"), 1);
+    if (addr) DobbyHook(addr, (void*)Emoji_Update, (void**)&_Emoji_Update);
   }
 
   // ── Camera Zoom hooks (CameraSystem – Scripts.GameCore.dll, global namespace) ──
