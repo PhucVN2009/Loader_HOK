@@ -576,15 +576,61 @@ void DrawMenu() {
         ImGui::Separator();
         ImGui::Spacing();
 
-        // ── Boost chiến lực ───────────────────────────────────────────────
-        ImGui::Checkbox("Boost Chien Luc Linh Bao", &lingbao_boost_fight);
+        // ── Lực chiến 9999999 ─────────────────────────────────────────────
+        ImGui::Checkbox("Luc Chien 9,999,999", &lingbao_boost_fight);
         if (lingbao_boost_fight) {
             ImGui::Spacing();
-            ImGui::SliderInt("Nhan Chien Luc", &lingbao_fight_mult, 1, 20);
-            ImGui::TextColored(ImColor(150, 220, 255),
-                "Chien luc x%d lan truoc khi vao tran.", lingbao_fight_mult);
+            ImGui::TextColored(ImColor(255, 180, 50),
+                ICON_FA_STAR " Chien luc linh bao se la 9.999.999 khi vao tran.");
             ImGui::Spacing();
         }
+
+        ImGui::Spacing();
+        ImGui::Separator();
+        ImGui::Spacing();
+
+        // ── Tốc độ trận ───────────────────────────────────────────────────
+        ImGui::TextColored(gold, ICON_FA_FORWARD " Toc Do Tran:");
+        ImGui::Spacing();
+        float btnW = (window_size.x - 15.0f * 4) / 3.0f;
+        ImGui::PushID(10);
+        if (lingbao_speed_mode == 0)
+            ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.2f, 0.6f, 0.2f, 1.0f));
+        else
+            ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.25f, 0.25f, 0.25f, 1.0f));
+        if (ImGui::Button("Binh Thuong (x1)", ImVec2(btnW, 55))) {
+            lingbao_speed_mode = 0;
+            ApplyLingBaoSpeed(nullptr);
+        }
+        ImGui::PopStyleColor();
+        ImGui::PopID();
+
+        ImGui::SameLine();
+        ImGui::PushID(11);
+        if (lingbao_speed_mode == 1)
+            ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.7f, 0.5f, 0.0f, 1.0f));
+        else
+            ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.25f, 0.25f, 0.25f, 1.0f));
+        if (ImGui::Button("Nhanh x3", ImVec2(btnW, 55))) {
+            lingbao_speed_mode = 1;
+            ApplyLingBaoSpeed(nullptr);
+        }
+        ImGui::PopStyleColor();
+        ImGui::PopID();
+
+        ImGui::SameLine();
+        ImGui::PushID(12);
+        if (lingbao_speed_mode == 2)
+            ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.8f, 0.1f, 0.1f, 1.0f));
+        else
+            ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.25f, 0.25f, 0.25f, 1.0f));
+        if (ImGui::Button("Nhanh x5", ImVec2(btnW, 55))) {
+            lingbao_speed_mode = 2;
+            ApplyLingBaoSpeed(nullptr);
+        }
+        ImGui::PopStyleColor();
+        ImGui::PopID();
+        ImGui::Spacing();
 
         ImGui::Spacing();
         ImGui::Separator();
@@ -595,7 +641,7 @@ void DrawMenu() {
         if (lingbao_auto_win) {
             ImGui::Spacing();
             ImGui::TextColored(ImColor(100, 255, 100),
-                "Ket qua tran se duoc chuyen thanh THANG.");
+                ICON_FA_CHECK " Ket qua tran se duoc chuyen thanh THANG.");
         }
 
         ImGui::Spacing();
@@ -603,21 +649,23 @@ void DrawMenu() {
         ImGui::Spacing();
 
         ImGui::TextColored(ImColor(255, 220, 0), ICON_FA_INFO_CIRCLE " Huong dan:");
-        ImGui::BeginChild("lb_guide", ImVec2(-1, 170), true);
-        ImGui::TextColored(ImColor(100, 220, 255), "=== BOOST CHIEN LUC ===");
+        ImGui::BeginChild("lb_guide", ImVec2(-1, 175), true);
+        ImGui::TextColored(ImColor(100, 220, 255), "=== LUC CHIEN 9,999,999 ===");
         ImGui::TextWrapped(
-            "1. Bat 'Boost Chien Luc Linh Bao'.\n"
-            "2. Chinh slider 'Nhan Chien Luc' (1-20x).\n"
-            "3. Vao che do Thu Thach Linh Bao nhu binh thuong.\n"
-            "4. Chien luc se duoc nhan len khi tran bat dau.\n"
-            "-> Linh Bao manh hon, gay nhieu sat thuong hon.\n");
+            "Bat 'Luc Chien 9,999,999' roi vao tran.\n"
+            "Linh bao se co chien luc toi da, sat thuong\n"
+            "va HP se tang manh.\n");
+        ImGui::Spacing();
+        ImGui::TextColored(ImColor(255, 200, 50), "=== TOC DO TRAN ===");
+        ImGui::TextWrapped(
+            "Chon toc do truoc hoac trong tran.\n"
+            "x3 = nhanh gap 3, x5 = nhanh gap 5.\n"
+            "Auto ap dung khi tran bat dau.\n");
         ImGui::Spacing();
         ImGui::TextColored(ImColor(100, 255, 160), "=== AUTO THANG ===");
         ImGui::TextWrapped(
-            "1. Bat 'Auto Thang Linh Bao'.\n"
-            "2. Choi tran binh thuong.\n"
-            "3. Ket qua se tu dong chuyen sang THANG\n"
-            "   bat ke ket qua thuc te la thua hay thang.");
+            "Bat truoc khi ket thuc tran.\n"
+            "Ket qua tu dong chuyen sang THANG.");
         ImGui::EndChild();
     }
     else if (activeFeature == 1) {
@@ -1067,7 +1115,8 @@ void hack_injec() {
   // ── LingBao Challenge Mode hooks ──────────────────────────────────────────
   {
     void* lbAddr;
-    // Boost fight power: CLingBaoBattleSys::ReqStartLingBaoLevel(startParam)
+
+    // Luc chien 9999999: CLingBaoBattleSys::ReqStartLingBaoLevel(startParam)
     lbAddr = Il2CppGetMethodOffset("Scripts.System.dll", "Assets.Scripts.GameSystem",
                                     "CLingBaoBattleSys", "ReqStartLingBaoLevel", 1);
     if (lbAddr) DobbyHook(lbAddr, (void*)new_ReqStartLingBaoLevel, (void**)&_ReqStartLingBaoLevel);
@@ -1076,6 +1125,16 @@ void hack_injec() {
     lbAddr = Il2CppGetMethodOffset("Scripts.GameCore.dll", "Assets.Scripts.GameLogic",
                                     "GameFinishProcesser", "OnReceiveLingBaoSettleResult", 1);
     if (lbAddr) DobbyHook(lbAddr, (void*)new_OnReceiveLingBaoSettleResult, (void**)&_OnReceiveLingBaoSettleResult);
+
+    // Toc do tran: LingBaoFightForm::BattleStart() - auto-apply speed on battle start
+    lbAddr = Il2CppGetMethodOffset("Scripts.GameCore.dll", "Assets.Scripts.GameSystem",
+                                    "LingBaoFightForm", "BattleStart", 0);
+    if (lbAddr) DobbyHook(lbAddr, (void*)new_LBBattleStart, (void**)&_LBBattleStart);
+
+    // SetGameSpeed: BattleCommonTools::SetGameSpeed(float) - static, keep pointer
+    lbAddr = Il2CppGetMethodOffset("Scripts.GameCore.dll", "GameCoreScripts.Scripts.BattleTools",
+                                    "BattleCommonTools", "SetGameSpeed", 1);
+    if (lbAddr) fn_SetGameSpeed = (fn_SetGameSpeed_t)lbAddr;
   }
 
   // ── AnoSDK bypass: hook report-data functions so no reports are uploaded ──
