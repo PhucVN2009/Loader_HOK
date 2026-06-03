@@ -50,6 +50,7 @@
 #include "modskin.h"
 #include "modmap.h"
 #include "modcam.h"
+#include "modlingbao.h"
 #include "imgui/Icon.h"
 #include "imgui/Iconcpp.h"
 #include "AutoUpdate/IL2CppSDKGenerator/Il2Cpp.h"
@@ -456,8 +457,8 @@ void DrawMenu() {
     ImGui::Spacing();
 
     float padding = 15.0f;
-    float totalPadding = padding * 3;
-    float buttonWidth = (window_size.x - totalPadding) / 2.0f;
+    float totalPadding = padding * 4;
+    float buttonWidth = (window_size.x - totalPadding) / 3.0f;
     float buttonHeight = 65.0f;
 
     ImGui::SetCursorPosX(padding);
@@ -469,6 +470,14 @@ void DrawMenu() {
 
     ImGui::SameLine();
     ImGui::SetCursorPosX(padding * 2 + buttonWidth);
+    ImGui::PushID(3);
+    if (ImGui::Button(ICON_FA_FIRE, ImVec2(buttonWidth, buttonHeight))) {
+        activeFeature = 2;
+    }
+    ImGui::PopID();
+
+    ImGui::SameLine();
+    ImGui::SetCursorPosX(padding * 3 + buttonWidth * 2);
     ImGui::PushID(2);
     if (ImGui::Button(ICON_FA_DATABASE, ImVec2(buttonWidth, buttonHeight))) {
         activeFeature = 1;
@@ -557,6 +566,59 @@ void DrawMenu() {
         if (m_CameraZoom) {
             ImGui::SliderInt("Zoom", &m_CameraZoomValue, 0, 100);
         }
+    }
+    else if (activeFeature == 2) {
+        // ── Linh Bảo Challenge Tab ─────────────────────────────────────────
+        ImVec4 gold = ImVec4(1.0f, 0.85f, 0.1f, 1.0f);
+
+        ImGui::TextColored(gold, ICON_FA_FIRE " Che Do Thu Thach Linh Bao");
+        ImGui::Spacing();
+        ImGui::Separator();
+        ImGui::Spacing();
+
+        // ── Boost chiến lực ───────────────────────────────────────────────
+        ImGui::Checkbox("Boost Chien Luc Linh Bao", &lingbao_boost_fight);
+        if (lingbao_boost_fight) {
+            ImGui::Spacing();
+            ImGui::SliderInt("Nhan Chien Luc", &lingbao_fight_mult, 1, 20);
+            ImGui::TextColored(ImColor(150, 220, 255),
+                "Chien luc x%d lan truoc khi vao tran.", lingbao_fight_mult);
+            ImGui::Spacing();
+        }
+
+        ImGui::Spacing();
+        ImGui::Separator();
+        ImGui::Spacing();
+
+        // ── Auto thắng ────────────────────────────────────────────────────
+        ImGui::Checkbox("Auto Thang Linh Bao", &lingbao_auto_win);
+        if (lingbao_auto_win) {
+            ImGui::Spacing();
+            ImGui::TextColored(ImColor(100, 255, 100),
+                "Ket qua tran se duoc chuyen thanh THANG.");
+        }
+
+        ImGui::Spacing();
+        ImGui::Separator();
+        ImGui::Spacing();
+
+        ImGui::TextColored(ImColor(255, 220, 0), ICON_FA_INFO_CIRCLE " Huong dan:");
+        ImGui::BeginChild("lb_guide", ImVec2(-1, 170), true);
+        ImGui::TextColored(ImColor(100, 220, 255), "=== BOOST CHIEN LUC ===");
+        ImGui::TextWrapped(
+            "1. Bat 'Boost Chien Luc Linh Bao'.\n"
+            "2. Chinh slider 'Nhan Chien Luc' (1-20x).\n"
+            "3. Vao che do Thu Thach Linh Bao nhu binh thuong.\n"
+            "4. Chien luc se duoc nhan len khi tran bat dau.\n"
+            "-> Linh Bao manh hon, gay nhieu sat thuong hon.\n");
+        ImGui::Spacing();
+        ImGui::TextColored(ImColor(100, 255, 160), "=== AUTO THANG ===");
+        ImGui::TextWrapped(
+            "1. Bat 'Auto Thang Linh Bao'.\n"
+            "2. Choi tran binh thuong.\n"
+            "3. Ket qua se tu dong chuyen sang THANG\n"
+            "   bat ke ket qua thuc te la thua hay thang.");
+        ImGui::EndChild();
     }
     else if (activeFeature == 1) {
         ImGui::Columns(2, "deviceInfo", false);
@@ -1000,6 +1062,20 @@ void hack_injec() {
     if (up) DobbyHook(up, (void*)CameraUpdate_hook, (void**)&orig_CameraUpdate);
     void* sz = Il2CppGetMethodOffset("Scripts.GameCore.dll", "", "CameraSystem", "set_ZoomRateFromAge", 1);
     if (sz) set_ZoomRateFromAge = (set_ZoomRateFromAge_t)sz;
+  }
+
+  // ── LingBao Challenge Mode hooks ──────────────────────────────────────────
+  {
+    void* lbAddr;
+    // Boost fight power: CLingBaoBattleSys::ReqStartLingBaoLevel(startParam)
+    lbAddr = Il2CppGetMethodOffset("Scripts.System.dll", "Assets.Scripts.GameSystem",
+                                    "CLingBaoBattleSys", "ReqStartLingBaoLevel", 1);
+    if (lbAddr) DobbyHook(lbAddr, (void*)new_ReqStartLingBaoLevel, (void**)&_ReqStartLingBaoLevel);
+
+    // Auto win: GameFinishProcesser::OnReceiveLingBaoSettleResult(settleData)
+    lbAddr = Il2CppGetMethodOffset("Scripts.GameCore.dll", "Assets.Scripts.GameLogic",
+                                    "GameFinishProcesser", "OnReceiveLingBaoSettleResult", 1);
+    if (lbAddr) DobbyHook(lbAddr, (void*)new_OnReceiveLingBaoSettleResult, (void**)&_OnReceiveLingBaoSettleResult);
   }
 
   // ── AnoSDK bypass: hook report-data functions so no reports are uploaded ──
