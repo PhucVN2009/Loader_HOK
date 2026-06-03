@@ -6,13 +6,13 @@
 //
 // Hook 1 – Max skill/equip level + fight = 9999999 trước khi vào trận
 //   CLingBaoBattleSys::ReqStartLingBaoLevel(LBMGStartGameData startParam)
-//   @ Scripts.System.dll
+//   @ Scripts.System.dll  |  0x8ED08C4
 //
 // Hook 2 – Auto thắng: đặt WinLoseForm.m_win = true TRƯỚC khi StartLingBaoSettlement
 //   WinLoseForm::StartLingBaoSettlement()  @ Scripts.GameCore.dll  |  0x64885A0
 //   Hàm này CHỈ được gọi trong trận linh bảo → an toàn, không ảnh hưởng trận thường
 //
-// Hook 3 – Phần thưởng win: ép isWin = true trong kết quả settle
+// Hook 3 – Phần thưởng win: ép isWin = true + addStar >= 1 trong kết quả settle
 //   GameFinishProcesser::OnReceiveLingBaoSettleResult(LBMGEndGameData settleData)
 //   @ Scripts.GameCore.dll  |  0x63313A0
 //
@@ -20,6 +20,10 @@
 //   LingBaoFightForm::BattleStart()  @ Scripts.GameCore.dll  |  0x5AA62B4
 //   BattleCommonTools::SetGameSpeed(float)  – static
 //   @ Scripts.GameCore.dll  |  0x59ED9E8
+//
+// Hook 5 – Màn hình thắng/thua: ép bWin=true khi đang trong trận linh bảo
+//   WinLose::ShowPanel(bWin, bJumpShowPanel, showHeroId)
+//   @ Scripts.GameCore.dll  |  0x64B02D0
 //
 // ─── Field/array offsets ─────────────────────────────────────────────────────
 //
@@ -47,6 +51,7 @@
 // LBMGEndGameData (class):
 //   + 0x08 : isSvrSuccess (bool)
 //   + 0x09 : isWin        (bool)
+//   + 0x14 : addStar      (uint32)
 //
 // WinLoseForm (class):
 //   + 0x08 : m_win        (bool)  ← target for auto win
@@ -58,6 +63,9 @@
 bool lingbao_boost_fight = false;
 bool lingbao_auto_win    = false;
 int  lingbao_speed_mode  = 0;   // 0=normal, 1=x3, 2=x5
+
+// Set true when inside a LingBao battle, cleared after settlement received
+static bool g_in_lingbao_battle = false;
 
 static const float LINGBAO_SPEEDS[] = { 1.0f, 3.0f, 5.0f };
 
@@ -89,6 +97,7 @@ static inline void BoostLBMGLevelArray(void* arr_ptr, uint32_t max_level) {
 static void (*_ReqStartLingBaoLevel)(void* instance, void* startParam, void* method_info);
 static void new_ReqStartLingBaoLevel(void* instance, void* startParam, void* method_info) {
     if (!_ReqStartLingBaoLevel) return;
+    g_in_lingbao_battle = true;  // mark entering a LingBao battle
     if (lingbao_boost_fight && startParam != nullptr) {
         // fight display score
         *(uint32_t*)((uint8_t*)startParam + 0x20) = 9999999u;
@@ -116,15 +125,18 @@ static void new_StartLingBaoSettlement(void* instance, void* method_info) {
     _StartLingBaoSettlement(instance, method_info);
 }
 
-// ─── Hook 3: Ép isWin trong settle result (để nhận phần thưởng win) ──────────
+// ─── Hook 3: Ép isWin + addStar trong settle result (để nhận phần thưởng win) ──
 static void (*_OnReceiveLingBaoSettleResult)(void* instance, void* settleData, void* method_info);
 static void new_OnReceiveLingBaoSettleResult(void* instance, void* settleData, void* method_info) {
     if (!_OnReceiveLingBaoSettleResult) return;
     if (lingbao_auto_win && settleData != nullptr) {
-        *(bool*)((uint8_t*)settleData + 0x08) = true;  // isSvrSuccess
-        *(bool*)((uint8_t*)settleData + 0x09) = true;  // isWin
+        *(bool*)((uint8_t*)settleData + 0x08) = true;    // isSvrSuccess
+        *(bool*)((uint8_t*)settleData + 0x09) = true;    // isWin
+        uint32_t* addStar = (uint32_t*)((uint8_t*)settleData + 0x14);
+        if (*addStar == 0) *addStar = 1u;                // addStar >= 1
     }
     _OnReceiveLingBaoSettleResult(instance, settleData, method_info);
+    g_in_lingbao_battle = false;  // battle ended
 }
 
 // ─── Hook 4: Tốc độ trận – auto-apply khi BattleStart ────────────────────────
@@ -133,4 +145,16 @@ static void new_LBBattleStart(void* instance, void* method_info) {
     if (_LBBattleStart) _LBBattleStart(instance, method_info);
     if (lingbao_speed_mode > 0)
         ApplyLingBaoSpeed(instance);
+}
+
+// ─── Hook 5: WinLose::ShowPanel – hiển thị màn hình thắng khi auto win ───────
+// Signature: void ShowPanel(bool bWin, bool bJumpShowPanel, uint32 showHeroId)
+// @ Scripts.GameCore.dll | 0x64B02D0
+static void (*_WinLoseShowPanel)(void* instance, bool bWin, bool bJumpShowPanel, uint32_t showHeroId, void* method_info);
+static void new_WinLoseShowPanel(void* instance, bool bWin, bool bJumpShowPanel, uint32_t showHeroId, void* method_info) {
+    if (!_WinLoseShowPanel) return;
+    if (lingbao_auto_win && g_in_lingbao_battle) {
+        bWin = true;
+    }
+    _WinLoseShowPanel(instance, bWin, bJumpShowPanel, showHeroId, method_info);
 }

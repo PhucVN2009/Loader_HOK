@@ -1116,30 +1116,28 @@ void hack_injec() {
   {
     void* lbAddr;
 
-    // Max skill/equip + fight=9999999: CLingBaoBattleSys::ReqStartLingBaoLevel
-    lbAddr = Il2CppGetMethodOffset("Scripts.System.dll", "Assets.Scripts.GameSystem",
-                                    "CLingBaoBattleSys", "ReqStartLingBaoLevel", 1);
-    if (lbAddr) DobbyHook(lbAddr, (void*)new_ReqStartLingBaoLevel, (void**)&_ReqStartLingBaoLevel);
+    // Max skill/equip + fight=9999999: CLingBaoBattleSys::ReqStartLingBaoLevel @ 0x8ED08C4
+    lbAddr = getRealAddr(0x8ED08C4);
+    DobbyHook(lbAddr, (void*)new_ReqStartLingBaoLevel, (void**)&_ReqStartLingBaoLevel);
 
-    // Auto win – WinLoseForm::StartLingBaoSettlement() (only called in LingBao battles)
-    lbAddr = Il2CppGetMethodOffset("Scripts.GameCore.dll", "Assets.Scripts.GameLogic",
-                                    "WinLoseForm", "StartLingBaoSettlement", 0);
-    if (lbAddr) DobbyHook(lbAddr, (void*)new_StartLingBaoSettlement, (void**)&_StartLingBaoSettlement);
+    // Auto win – WinLoseForm::StartLingBaoSettlement() @ 0x64885A0
+    lbAddr = getRealAddr(0x64885A0);
+    DobbyHook(lbAddr, (void*)new_StartLingBaoSettlement, (void**)&_StartLingBaoSettlement);
 
-    // Auto win rewards: GameFinishProcesser::OnReceiveLingBaoSettleResult(settleData)
-    lbAddr = Il2CppGetMethodOffset("Scripts.GameCore.dll", "Assets.Scripts.GameLogic",
-                                    "GameFinishProcesser", "OnReceiveLingBaoSettleResult", 1);
-    if (lbAddr) DobbyHook(lbAddr, (void*)new_OnReceiveLingBaoSettleResult, (void**)&_OnReceiveLingBaoSettleResult);
+    // Auto win rewards: GameFinishProcesser::OnReceiveLingBaoSettleResult @ 0x63313A0
+    lbAddr = getRealAddr(0x63313A0);
+    DobbyHook(lbAddr, (void*)new_OnReceiveLingBaoSettleResult, (void**)&_OnReceiveLingBaoSettleResult);
 
-    // Speed – LingBaoFightForm::BattleStart()
-    lbAddr = Il2CppGetMethodOffset("Scripts.GameCore.dll", "Assets.Scripts.GameSystem",
-                                    "LingBaoFightForm", "BattleStart", 0);
-    if (lbAddr) DobbyHook(lbAddr, (void*)new_LBBattleStart, (void**)&_LBBattleStart);
+    // Speed – LingBaoFightForm::BattleStart() @ 0x5AA62B4
+    lbAddr = getRealAddr(0x5AA62B4);
+    DobbyHook(lbAddr, (void*)new_LBBattleStart, (void**)&_LBBattleStart);
 
-    // Speed – BattleCommonTools::SetGameSpeed(float) static
-    lbAddr = Il2CppGetMethodOffset("Scripts.GameCore.dll", "GameCoreScripts.Scripts.BattleTools",
-                                    "BattleCommonTools", "SetGameSpeed", 1);
-    if (lbAddr) fn_SetGameSpeed = (fn_SetGameSpeed_t)lbAddr;
+    // Speed – BattleCommonTools::SetGameSpeed(float) static @ 0x59ED9E8
+    fn_SetGameSpeed = (fn_SetGameSpeed_t)getRealAddr(0x59ED9E8);
+
+    // Win screen – WinLose::ShowPanel(bWin, bJumpShowPanel, showHeroId) @ 0x64B02D0
+    lbAddr = getRealAddr(0x64B02D0);
+    DobbyHook(lbAddr, (void*)new_WinLoseShowPanel, (void**)&_WinLoseShowPanel);
   }
 
   // ── AnoSDK bypass: hook report-data functions so no reports are uploaded ──
