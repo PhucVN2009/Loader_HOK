@@ -1116,22 +1116,27 @@ void hack_injec() {
   {
     void* lbAddr;
 
-    // Luc chien 9999999: CLingBaoBattleSys::ReqStartLingBaoLevel(startParam)
+    // Max skill/equip + fight=9999999: CLingBaoBattleSys::ReqStartLingBaoLevel
     lbAddr = Il2CppGetMethodOffset("Scripts.System.dll", "Assets.Scripts.GameSystem",
                                     "CLingBaoBattleSys", "ReqStartLingBaoLevel", 1);
     if (lbAddr) DobbyHook(lbAddr, (void*)new_ReqStartLingBaoLevel, (void**)&_ReqStartLingBaoLevel);
 
-    // Auto win: GameFinishProcesser::OnReceiveLingBaoSettleResult(settleData)
+    // Auto win – WinLoseForm::StartLingBaoSettlement() (only called in LingBao battles)
+    lbAddr = Il2CppGetMethodOffset("Scripts.GameCore.dll", "Assets.Scripts.GameLogic",
+                                    "WinLoseForm", "StartLingBaoSettlement", 0);
+    if (lbAddr) DobbyHook(lbAddr, (void*)new_StartLingBaoSettlement, (void**)&_StartLingBaoSettlement);
+
+    // Auto win rewards: GameFinishProcesser::OnReceiveLingBaoSettleResult(settleData)
     lbAddr = Il2CppGetMethodOffset("Scripts.GameCore.dll", "Assets.Scripts.GameLogic",
                                     "GameFinishProcesser", "OnReceiveLingBaoSettleResult", 1);
     if (lbAddr) DobbyHook(lbAddr, (void*)new_OnReceiveLingBaoSettleResult, (void**)&_OnReceiveLingBaoSettleResult);
 
-    // Toc do tran: LingBaoFightForm::BattleStart() - auto-apply speed on battle start
+    // Speed – LingBaoFightForm::BattleStart()
     lbAddr = Il2CppGetMethodOffset("Scripts.GameCore.dll", "Assets.Scripts.GameSystem",
                                     "LingBaoFightForm", "BattleStart", 0);
     if (lbAddr) DobbyHook(lbAddr, (void*)new_LBBattleStart, (void**)&_LBBattleStart);
 
-    // SetGameSpeed: BattleCommonTools::SetGameSpeed(float) - static, keep pointer
+    // Speed – BattleCommonTools::SetGameSpeed(float) static
     lbAddr = Il2CppGetMethodOffset("Scripts.GameCore.dll", "GameCoreScripts.Scripts.BattleTools",
                                     "BattleCommonTools", "SetGameSpeed", 1);
     if (lbAddr) fn_SetGameSpeed = (fn_SetGameSpeed_t)lbAddr;
