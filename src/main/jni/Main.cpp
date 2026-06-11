@@ -410,6 +410,20 @@ void hack_injec() {
         lbAddr = Il2CppGetMethodOffset("Scripts.Base.dll", "", "SGW", "ForceFightOver", 3);
         if (!lbAddr) lbAddr = getRealAddr(0x4853FF0);
         if (lbAddr) fn_ForceFightOver = (fn_ForceFightOver_t)lbAddr;
+
+        // GameFinishProcesser::OnReceiveLingBaoSettleResult – ép addStar≥1 khi cap 100
+        lbAddr = Il2CppGetMethodOffset("Scripts.GameCore.dll", "Assets.Scripts.GameLogic",
+                                        "GameFinishProcesser", "OnReceiveLingBaoSettleResult", 1);
+        if (!lbAddr) lbAddr = getRealAddr(0x63313A0);
+        if (lbAddr) DobbyHook(lbAddr, (void*)new_OnReceiveLingBaoSettleResult,
+                               (void**)&_OnReceiveLingBaoSettleResult);
+
+        // CLingBaoBattleSys::ValidateStartParam – luôn cho phép bắt đầu trận
+        lbAddr = Il2CppGetMethodOffset("Scripts.System.dll", "Assets.Scripts.GameSystem",
+                                        "CLingBaoBattleSys", "ValidateStartParam", 1);
+        if (!lbAddr) lbAddr = getRealAddr(0x8ED0AC0);
+        if (lbAddr) DobbyHook(lbAddr, (void*)new_ValidateStartParam,
+                               (void**)&_ValidateStartParam);
     }
 
     // ── AnoSDK bypass ────────────────────────────────────────────────────────
