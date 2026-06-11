@@ -381,16 +381,30 @@ void DrawLogo() {
   ImVec2 pos = ImGui::GetCursorScreenPos();
   ImVec2 rect = ImVec2(pos.x + size, pos.y + size);
   ImDrawList* draw_list = ImGui::GetWindowDrawList();
-  draw_list->AddRectFilled(pos, rect, IM_COL32(255, 255, 255, 60), size * 0.5f);
 
-  ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(1.0f, 1.0f, 1.0f, 0.25f));
-  ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(1.0f, 1.0f, 1.0f, 0.35f));
-  ImGui::PushStyleColor(ImGuiCol_ButtonActive, ImVec4(1.0f, 1.0f, 1.0f, 0.45f));
+  // Green glow when active, subtle white when inactive
+  ImU32 bgCol = lingbao_auto_win
+      ? IM_COL32(0, 220, 80, 90)
+      : IM_COL32(255, 255, 255, 60);
+  draw_list->AddRectFilled(pos, rect, bgCol, size * 0.5f);
 
-  hue += ImGui::GetIO().DeltaTime * 0.3f;
-  if (hue > 1.0f) hue -= 1.0f;
+  ImVec4 btnCol = lingbao_auto_win
+      ? ImVec4(0.0f, 0.8f, 0.3f, 0.55f)
+      : ImVec4(1.0f, 1.0f, 1.0f, 0.25f);
+  ImVec4 btnHov = lingbao_auto_win
+      ? ImVec4(0.0f, 0.9f, 0.4f, 0.65f)
+      : ImVec4(1.0f, 1.0f, 1.0f, 0.35f);
+  ImVec4 btnAct = lingbao_auto_win
+      ? ImVec4(0.0f, 1.0f, 0.5f, 0.75f)
+      : ImVec4(1.0f, 1.0f, 1.0f, 0.45f);
 
-  ImVec4 textColor = ImColor::HSV(hue, 0.8f, 1.0f);
+  ImGui::PushStyleColor(ImGuiCol_Button, btnCol);
+  ImGui::PushStyleColor(ImGuiCol_ButtonHovered, btnHov);
+  ImGui::PushStyleColor(ImGuiCol_ButtonActive, btnAct);
+
+  ImVec4 textColor = lingbao_auto_win
+      ? ImVec4(0.0f, 1.0f, 0.4f, 1.0f)
+      : ImColor::HSV(hue, 0.8f, 1.0f);
   ImGui::PushStyleColor(ImGuiCol_Text, textColor);
 
   ImGui::Button(ICON_FA_POWER_OFF, ImVec2(size, size));
@@ -406,7 +420,8 @@ void DrawLogo() {
 
   if (ImGui::IsItemDeactivated()) {
     if (!dragging && ImGui::IsItemHovered()) {
-      g_ShowMenu = !g_ShowMenu;
+      lingbao_auto_win   = !lingbao_auto_win;
+      g_force_win_called = false;  // reset so next battle triggers immediately
     }
     dragging = false;
   }
@@ -470,14 +485,6 @@ void DrawMenu() {
 
     ImGui::SameLine();
     ImGui::SetCursorPosX(padding * 2 + buttonWidth);
-    ImGui::PushID(3);
-    if (ImGui::Button(ICON_FA_FIRE, ImVec2(buttonWidth, buttonHeight))) {
-        activeFeature = 2;
-    }
-    ImGui::PopID();
-
-    ImGui::SameLine();
-    ImGui::SetCursorPosX(padding * 3 + buttonWidth * 2);
     ImGui::PushID(2);
     if (ImGui::Button(ICON_FA_DATABASE, ImVec2(buttonWidth, buttonHeight))) {
         activeFeature = 1;
@@ -566,107 +573,6 @@ void DrawMenu() {
         if (m_CameraZoom) {
             ImGui::SliderInt("Zoom", &m_CameraZoomValue, 0, 100);
         }
-    }
-    else if (activeFeature == 2) {
-        // ── Linh Bảo Challenge Tab ─────────────────────────────────────────
-        ImVec4 gold = ImVec4(1.0f, 0.85f, 0.1f, 1.0f);
-
-        ImGui::TextColored(gold, ICON_FA_FIRE " Che Do Thu Thach Linh Bao");
-        ImGui::Spacing();
-        ImGui::Separator();
-        ImGui::Spacing();
-
-        // ── Lực chiến 9999999 ─────────────────────────────────────────────
-        ImGui::Checkbox("Luc Chien 9,999,999", &lingbao_boost_fight);
-        if (lingbao_boost_fight) {
-            ImGui::Spacing();
-            ImGui::TextColored(ImColor(255, 180, 50),
-                ICON_FA_STAR " Chien luc linh bao se la 9.999.999 khi vao tran.");
-            ImGui::Spacing();
-        }
-
-        ImGui::Spacing();
-        ImGui::Separator();
-        ImGui::Spacing();
-
-        // ── Tốc độ trận ───────────────────────────────────────────────────
-        ImGui::TextColored(gold, ICON_FA_FORWARD " Toc Do Tran:");
-        ImGui::Spacing();
-        float btnW = (window_size.x - 15.0f * 4) / 3.0f;
-        ImGui::PushID(10);
-        if (lingbao_speed_mode == 0)
-            ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.2f, 0.6f, 0.2f, 1.0f));
-        else
-            ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.25f, 0.25f, 0.25f, 1.0f));
-        if (ImGui::Button("Binh Thuong (x1)", ImVec2(btnW, 55))) {
-            lingbao_speed_mode = 0;
-            ApplyLingBaoSpeed(nullptr);
-        }
-        ImGui::PopStyleColor();
-        ImGui::PopID();
-
-        ImGui::SameLine();
-        ImGui::PushID(11);
-        if (lingbao_speed_mode == 1)
-            ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.7f, 0.5f, 0.0f, 1.0f));
-        else
-            ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.25f, 0.25f, 0.25f, 1.0f));
-        if (ImGui::Button("Nhanh x3", ImVec2(btnW, 55))) {
-            lingbao_speed_mode = 1;
-            ApplyLingBaoSpeed(nullptr);
-        }
-        ImGui::PopStyleColor();
-        ImGui::PopID();
-
-        ImGui::SameLine();
-        ImGui::PushID(12);
-        if (lingbao_speed_mode == 2)
-            ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.8f, 0.1f, 0.1f, 1.0f));
-        else
-            ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.25f, 0.25f, 0.25f, 1.0f));
-        if (ImGui::Button("Nhanh x5", ImVec2(btnW, 55))) {
-            lingbao_speed_mode = 2;
-            ApplyLingBaoSpeed(nullptr);
-        }
-        ImGui::PopStyleColor();
-        ImGui::PopID();
-        ImGui::Spacing();
-
-        ImGui::Spacing();
-        ImGui::Separator();
-        ImGui::Spacing();
-
-        // ── Auto thắng ────────────────────────────────────────────────────
-        ImGui::Checkbox("Auto Thang Linh Bao", &lingbao_auto_win);
-        if (lingbao_auto_win) {
-            ImGui::Spacing();
-            ImGui::TextColored(ImColor(100, 255, 100),
-                ICON_FA_CHECK " HP linh bao doi thu se ve 0, tu dong thang tran.");
-        }
-
-        ImGui::Spacing();
-        ImGui::Separator();
-        ImGui::Spacing();
-
-        ImGui::TextColored(ImColor(255, 220, 0), ICON_FA_INFO_CIRCLE " Huong dan:");
-        ImGui::BeginChild("lb_guide", ImVec2(-1, 175), true);
-        ImGui::TextColored(ImColor(100, 220, 255), "=== LUC CHIEN 9,999,999 ===");
-        ImGui::TextWrapped(
-            "Bat 'Luc Chien 9,999,999' roi vao tran.\n"
-            "Chien luc, cap ky nang va trang bi linh bao\n"
-            "se dat muc toi da.\n");
-        ImGui::Spacing();
-        ImGui::TextColored(ImColor(255, 200, 50), "=== TOC DO TRAN ===");
-        ImGui::TextWrapped(
-            "Chon toc do truoc hoac trong tran.\n"
-            "x3 = nhanh gap 3, x5 = nhanh gap 5.\n");
-        ImGui::Spacing();
-        ImGui::TextColored(ImColor(100, 255, 160), "=== AUTO THANG ===");
-        ImGui::TextWrapped(
-            "Bat truoc khi vao tran.\n"
-            "HP linh bao doi thu se ve 0 ngay khi tran bat dau,\n"
-            "he thong tu dong tinh thang va cap nhat sao.");
-        ImGui::EndChild();
     }
     else if (activeFeature == 1) {
         ImGui::Columns(2, "deviceInfo", false);
@@ -1113,35 +1019,17 @@ void hack_injec() {
     if (sz) set_ZoomRateFromAge = (set_ZoomRateFromAge_t)sz;
   }
 
-  // ── LingBao Challenge Mode hooks ──────────────────────────────────────────
+  // ── LingBao Auto Win ──────────────────────────────────────────────────────
   {
     void* lbAddr;
 
-    // Max skill/equip + fight=9999999: CLingBaoBattleSys::ReqStartLingBaoLevel
-    lbAddr = Il2CppGetMethodOffset("Scripts.System.dll", "Assets.Scripts.GameSystem",
-                                    "CLingBaoBattleSys", "ReqStartLingBaoLevel", 1);
-    if (!lbAddr) lbAddr = getRealAddr(0x8ED08C4);
-    if (lbAddr) DobbyHook(lbAddr, (void*)new_ReqStartLingBaoLevel, (void**)&_ReqStartLingBaoLevel);
-
-    // Speed – LingBaoFightForm::BattleStart()
-    lbAddr = Il2CppGetMethodOffset("Scripts.GameCore.dll", "Assets.Scripts.GameSystem",
-                                    "LingBaoFightForm", "BattleStart", 0);
-    if (!lbAddr) lbAddr = getRealAddr(0x5AA62B4);
-    if (lbAddr) DobbyHook(lbAddr, (void*)new_LBBattleStart, (void**)&_LBBattleStart);
-
-    // Speed – BattleCommonTools::SetGameSpeed(float) static
-    lbAddr = Il2CppGetMethodOffset("Scripts.GameCore.dll", "GameCoreScripts.Scripts.BattleTools",
-                                    "BattleCommonTools", "SetGameSpeed", 1);
-    if (!lbAddr) lbAddr = getRealAddr(0x59ED9E8);
-    if (lbAddr) fn_SetGameSpeed = (fn_SetGameSpeed_t)lbAddr;
-
-    // Auto thắng – LingBaoFightForm::UpdateBlood(selfBlood, selfBloodMax, enemyBlood, enemyBloodMax, selfShield, enemyShield)
+    // LingBaoFightForm::UpdateBlood – ép enemyBlood=0 + gọi ForceFightOver
     lbAddr = Il2CppGetMethodOffset("Scripts.GameCore.dll", "Assets.Scripts.GameSystem",
                                     "LingBaoFightForm", "UpdateBlood", 6);
     if (!lbAddr) lbAddr = getRealAddr(0x5AA53A8);
     if (lbAddr) DobbyHook(lbAddr, (void*)new_UpdateBlood, (void**)&_UpdateBlood);
 
-    // Auto thắng – SGW::ForceFightOver(isGm, isWin, isQuit) static
+    // SGW::ForceFightOver(isGm, isWin, isQuit) static – kết thúc trận với kết quả thắng
     lbAddr = Il2CppGetMethodOffset("Scripts.Base.dll", "", "SGW", "ForceFightOver", 3);
     if (!lbAddr) lbAddr = getRealAddr(0x4853FF0);
     if (lbAddr) fn_ForceFightOver = (fn_ForceFightOver_t)lbAddr;
