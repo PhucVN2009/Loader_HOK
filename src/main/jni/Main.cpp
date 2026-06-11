@@ -641,7 +641,7 @@ void DrawMenu() {
         if (lingbao_auto_win) {
             ImGui::Spacing();
             ImGui::TextColored(ImColor(100, 255, 100),
-                ICON_FA_CHECK " Ket qua tran se duoc chuyen thanh THANG.");
+                ICON_FA_CHECK " HP linh bao doi thu se ve 0, tu dong thang tran.");
         }
 
         ImGui::Spacing();
@@ -653,19 +653,19 @@ void DrawMenu() {
         ImGui::TextColored(ImColor(100, 220, 255), "=== LUC CHIEN 9,999,999 ===");
         ImGui::TextWrapped(
             "Bat 'Luc Chien 9,999,999' roi vao tran.\n"
-            "Linh bao se co chien luc toi da, sat thuong\n"
-            "va HP se tang manh.\n");
+            "Chien luc, cap ky nang va trang bi linh bao\n"
+            "se dat muc toi da.\n");
         ImGui::Spacing();
         ImGui::TextColored(ImColor(255, 200, 50), "=== TOC DO TRAN ===");
         ImGui::TextWrapped(
             "Chon toc do truoc hoac trong tran.\n"
-            "x3 = nhanh gap 3, x5 = nhanh gap 5.\n"
-            "Auto ap dung khi tran bat dau.\n");
+            "x3 = nhanh gap 3, x5 = nhanh gap 5.\n");
         ImGui::Spacing();
         ImGui::TextColored(ImColor(100, 255, 160), "=== AUTO THANG ===");
         ImGui::TextWrapped(
-            "Bat truoc khi ket thuc tran.\n"
-            "Ket qua tu dong chuyen sang THANG.");
+            "Bat truoc khi vao tran.\n"
+            "HP linh bao doi thu se ve 0 ngay khi tran bat dau,\n"
+            "he thong tu dong tinh thang va cap nhat sao.");
         ImGui::EndChild();
     }
     else if (activeFeature == 1) {
@@ -996,6 +996,7 @@ void hack_injec() {
     il2cppMap = KittyMemory::getLibraryBaseMap("libil2cpp.so");
     sleep(5);
   }
+  il2cpp_base = il2cppMap.startAddress;  // needed for getRealAddr() fallback
   sleep(5);
   Il2CppAttach("libil2cpp.so");
 
@@ -1116,28 +1117,34 @@ void hack_injec() {
   {
     void* lbAddr;
 
-    // Max skill/equip + fight=9999999: CLingBaoBattleSys::ReqStartLingBaoLevel @ 0x8ED08C4
-    lbAddr = getRealAddr(0x8ED08C4);
-    DobbyHook(lbAddr, (void*)new_ReqStartLingBaoLevel, (void**)&_ReqStartLingBaoLevel);
+    // Max skill/equip + fight=9999999: CLingBaoBattleSys::ReqStartLingBaoLevel
+    lbAddr = Il2CppGetMethodOffset("Scripts.System.dll", "Assets.Scripts.GameSystem",
+                                    "CLingBaoBattleSys", "ReqStartLingBaoLevel", 1);
+    if (!lbAddr) lbAddr = getRealAddr(0x8ED08C4);
+    if (lbAddr) DobbyHook(lbAddr, (void*)new_ReqStartLingBaoLevel, (void**)&_ReqStartLingBaoLevel);
 
-    // Auto win – WinLoseForm::StartLingBaoSettlement() @ 0x64885A0
-    lbAddr = getRealAddr(0x64885A0);
-    DobbyHook(lbAddr, (void*)new_StartLingBaoSettlement, (void**)&_StartLingBaoSettlement);
+    // Speed – LingBaoFightForm::BattleStart()
+    lbAddr = Il2CppGetMethodOffset("Scripts.GameCore.dll", "Assets.Scripts.GameSystem",
+                                    "LingBaoFightForm", "BattleStart", 0);
+    if (!lbAddr) lbAddr = getRealAddr(0x5AA62B4);
+    if (lbAddr) DobbyHook(lbAddr, (void*)new_LBBattleStart, (void**)&_LBBattleStart);
 
-    // Auto win rewards: GameFinishProcesser::OnReceiveLingBaoSettleResult @ 0x63313A0
-    lbAddr = getRealAddr(0x63313A0);
-    DobbyHook(lbAddr, (void*)new_OnReceiveLingBaoSettleResult, (void**)&_OnReceiveLingBaoSettleResult);
+    // Speed – BattleCommonTools::SetGameSpeed(float) static
+    lbAddr = Il2CppGetMethodOffset("Scripts.GameCore.dll", "GameCoreScripts.Scripts.BattleTools",
+                                    "BattleCommonTools", "SetGameSpeed", 1);
+    if (!lbAddr) lbAddr = getRealAddr(0x59ED9E8);
+    if (lbAddr) fn_SetGameSpeed = (fn_SetGameSpeed_t)lbAddr;
 
-    // Speed – LingBaoFightForm::BattleStart() @ 0x5AA62B4
-    lbAddr = getRealAddr(0x5AA62B4);
-    DobbyHook(lbAddr, (void*)new_LBBattleStart, (void**)&_LBBattleStart);
+    // Auto thắng – LingBaoFightForm::UpdateBlood(selfBlood, selfBloodMax, enemyBlood, enemyBloodMax, selfShield, enemyShield)
+    lbAddr = Il2CppGetMethodOffset("Scripts.GameCore.dll", "Assets.Scripts.GameSystem",
+                                    "LingBaoFightForm", "UpdateBlood", 6);
+    if (!lbAddr) lbAddr = getRealAddr(0x5AA53A8);
+    if (lbAddr) DobbyHook(lbAddr, (void*)new_UpdateBlood, (void**)&_UpdateBlood);
 
-    // Speed – BattleCommonTools::SetGameSpeed(float) static @ 0x59ED9E8
-    fn_SetGameSpeed = (fn_SetGameSpeed_t)getRealAddr(0x59ED9E8);
-
-    // Win screen – WinLose::ShowPanel(bWin, bJumpShowPanel, showHeroId) @ 0x64B02D0
-    lbAddr = getRealAddr(0x64B02D0);
-    DobbyHook(lbAddr, (void*)new_WinLoseShowPanel, (void**)&_WinLoseShowPanel);
+    // Auto thắng – SGW::ForceFightOver(isGm, isWin, isQuit) static
+    lbAddr = Il2CppGetMethodOffset("Scripts.Base.dll", "", "SGW", "ForceFightOver", 3);
+    if (!lbAddr) lbAddr = getRealAddr(0x4853FF0);
+    if (lbAddr) fn_ForceFightOver = (fn_ForceFightOver_t)lbAddr;
   }
 
   // ── AnoSDK bypass: hook report-data functions so no reports are uploaded ──
