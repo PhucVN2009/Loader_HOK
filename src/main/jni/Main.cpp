@@ -52,6 +52,7 @@
 #include "modmap.h"
 #include "modcam.h"
 #include "modlingbao.h"
+#include "modcd.h"
 #include "imgui/Icon.h"
 #include "imgui/Iconcpp.h"
 #include "AutoUpdate/IL2CppSDKGenerator/Il2Cpp.h"
@@ -542,6 +543,13 @@ void DrawMenu() {
         if (g_showAutoWinBtn)
             ImGui::TextColored(ImColor(180, 230, 255),
                 "Nut tron noi: do = tat, xanh = bat. Keo de di chuyen.");
+
+        ImGui::Spacing();
+        ImGui::Separator();
+        ImGui::Spacing();
+
+        // ── Show skill cooldown on hero name ───────────────────────────────
+        ImGui::Checkbox("Hien CD ky nang tren ten", &g_showCd);
     }
     else if (activeFeature == 1) {
         ImGui::Columns(2, "deviceInfo", false);
@@ -640,6 +648,8 @@ inline EGLBoolean hook_eglSwapBuffers(EGLDisplay dpy, EGLSurface surface) {
       io.MouseDown[0] = false;
     }
   }
+
+  g_cdTick++;
 
   // Apply the native map hack lazily, on a background thread, the first time the
   // user enables Map Hack — never at startup (avoids touching the game on inject).
@@ -977,6 +987,16 @@ void hack_injec() {
   // The native fog-reveal hook + anti-freeze patch are applied LAZILY (only when
   // Map Hack is turned ON), on a background thread — see EnableNativeMapHack().
   // Nothing in libGameCore is touched at startup.
+
+  // ── Show Cooldown on name (resolve by name) ──────────────────────────────
+  {
+    void* lu = Il2CppGetMethodOffset("Scripts.GameCore.dll", "Assets.Scripts.GameLogic", "ActorLinker", "HOK_OnLateUpdate", 1);
+    if (lu) DobbyHook(lu, (void*)cd_LateUpdate, (void**)&_cd_origLateUpdate);
+    void* cn = Il2CppGetMethodOffset("Scripts.GameCore.dll", "Assets.Scripts.GameLogic", "HudComponent3D", "ChangeName", 1);
+    if (cn) _cd_HudChangeName = (void(*)(void*,void*))cn;
+    void* ot = Il2CppGetMethodOffset("Scripts.GameCore.dll", "Assets.Scripts.GameLogic", "ActorLinker", "get_objType", 0);
+    if (ot) _cd_getObjType = (int(*)(void*))ot;
+  }
 
   // ── Camera Zoom hooks (CameraSystem – Scripts.GameCore.dll, global namespace) ──
   {
