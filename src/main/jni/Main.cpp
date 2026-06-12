@@ -50,8 +50,6 @@
 #include "modskin.h"
 #include "modmap.h"
 #include "modcam.h"
-#include "modesp.h"
-#include "modaim.h"
 #include "imgui/Icon.h"
 #include "imgui/Iconcpp.h"
 #include "AutoUpdate/IL2CppSDKGenerator/Il2Cpp.h"
@@ -483,71 +481,7 @@ void DrawMenu() {
 
     if (activeFeature == 0) {
 
-        // ── Unlock Skin ───────────────────────────────────────────────────
-        if (ImGui::Checkbox("Unlock Skin", &unlockskin)) {
-            if (!unlockskin) CSProtocol::saveData::resetArrayUnpackSkin();
-        }
-
-        if (unlockskin) {
-            ImGui::Spacing();
-            ImGui::InputInt("Hero ID", &heroid);
-            ImGui::InputInt("Skin ID", &skinid);
-            ImGui::Spacing();
-
-            if (ImGui::Button("Apply Skin", ImVec2(-1, 55))) {
-                CSProtocol::saveData::setData((uint32_t)heroid, (uint16_t)skinid);
-                CSProtocol::saveData::setEnable(true);
-            }
-
-            ImGui::Spacing();
-            ImGui::Separator();
-            ImGui::Spacing();
-
-            // ── Guide (scrollable child window) ──────────────────────────
-            ImGui::TextColored(ImColor(255, 220, 0), ICON_FA_INFO_CIRCLE " How to use:");
-            ImGui::BeginChild("guide_scroll", ImVec2(-1, 200), true,
-                              ImGuiWindowFlags_HorizontalScrollbar);
-
-            ImGui::TextColored(ImColor(100, 220, 255),
-                "=== HOW TO USE UNLOCK SKIN ===");
-            ImGui::TextWrapped(
-                "1. Turn ON 'Unlock Skin' toggle.\n"
-                "2. Hero ID = 0 applies skin to ALL heroes.\n"
-                "   Set Hero ID > 0 to target a specific hero.\n"
-                "3. Enter Skin ID (0 = default skin).\n"
-                "4. Click 'Apply Skin'.\n"
-                "5. Enter a match, the skin will be unlocked.\n\n"
-                "Example: Allain Levi skin:\n"
-                "Hero ID = 0, Skin ID = 5 -> Apply Skin\n"
-                "Spam pick that skin ~5 times in lobby.\n"
-                "-> In-game Allain wears Levi skin.");
-
-            ImGui::Spacing();
-            ImGui::Separator();
-            ImGui::Spacing();
-
-            ImGui::TextColored(ImColor(100, 255, 160),
-                "=== HUONG DAN UNLOCK SKIN ===");
-            ImGui::TextWrapped(
-                "1. Bat 'Unlock Skin'.\n"
-                "2. Hero ID = 0 ap dung cho TAT CA tuong.\n"
-                "   Hero ID > 0 chi ap dung cho tuong do.\n"
-                "3. Nhap Skin ID (0 = skin mac dinh).\n"
-                "4. Bam 'Apply Skin'.\n"
-                "5. Vao tran, skin se duoc mo khoa.\n\n"
-                "Vi du: Skin Levi cua Allain:\n"
-                "Hero ID = 0, Skin ID = 5 -> Apply Skin\n"
-                "Spam pick skin do ~5 lan trong lobby.\n"
-                "-> Trong tran Allain mac skin Levi.");
-
-            ImGui::EndChild();
-        }
-
         // ── Map Hack ──────────────────────────────────────────────────────
-        ImGui::Spacing();
-        ImGui::Separator();
-        ImGui::Spacing();
-
         if (ImGui::Checkbox("Map Hack", &maphack)) {}
 
         ImGui::Spacing();
@@ -558,36 +492,6 @@ void DrawMenu() {
         ImGui::Checkbox("Camera Zoom", &m_CameraZoom);
         if (m_CameraZoom) {
             ImGui::SliderInt("Zoom", &m_CameraZoomValue, 0, 100);
-        }
-
-        ImGui::Spacing();
-        ImGui::Separator();
-        ImGui::Spacing();
-
-        // ── ESP ────────────────────────────────────────────────────────────
-        ImGui::Checkbox("ESP", &g_espOn);
-        if (g_espOn) {
-            ImGui::Checkbox("Box", &g_espBox);      ImGui::SameLine();
-            ImGui::Checkbox("Line", &g_espLine);    ImGui::SameLine();
-            ImGui::Checkbox("Health", &g_espHealth);
-            ImGui::Checkbox("Show allies too", &g_espAlly); ImGui::SameLine();
-            ImGui::Checkbox("Debug", &g_espDebug);
-        }
-
-        ImGui::Spacing();
-        ImGui::Separator();
-        ImGui::Spacing();
-
-        // ── Aimbot ──────────────────────────────────────────────────────────
-        ImGui::Checkbox("Aimbot (skill)", &m_aimEnabled);
-        if (m_aimEnabled) {
-            const char* types[] = { "Lowest HP", "Lowest HP%", "Closest" };
-            ImGui::Combo("Target", &m_aimType, types, 3);
-            ImGui::SliderFloat("Range", &m_aimDist, 30.0f, 200.0f, "%.0f");
-            ImGui::SliderFloat("Prediction", &m_aimBullet, 1.0f, 30.0f, "%.0f");
-            ImGui::Checkbox("S1", &m_aimSkill1); ImGui::SameLine();
-            ImGui::Checkbox("S2", &m_aimSkill2); ImGui::SameLine();
-            ImGui::Checkbox("S3", &m_aimSkill3);
         }
     }
     else if (activeFeature == 1) {
@@ -683,9 +587,6 @@ inline EGLBoolean hook_eglSwapBuffers(EGLDisplay dpy, EGLSurface surface) {
     }
   }
 
-  g_espFrame++;
-  g_espCollect = g_espOn || m_aimEnabled;
-  DrawESP();
   DrawLogo();
   DrawMenu();
 
@@ -1019,7 +920,7 @@ void hack_injec() {
     ProcMap gcMap = KittyMemory::getLibraryBaseMap("libGameCore.so");
     for (int i = 0; i < 30 && !gcMap.isValid(); i++) { sleep(1); gcMap = KittyMemory::getLibraryBaseMap("libGameCore.so"); }
     if (gcMap.isValid()) {
-      uintptr_t fn = ResolveGCFuncByString("libGameCore.so", "IsSurfaceCellVisibleConsiderNeighbor");
+      uintptr_t fn = ResolveGCFuncByString("libGameCore.so", "IsCellVisible");
       if (fn) {
         DobbyHook((void*)fn, (void*)new_GC_IsCellVisible, (void**)&_GC_IsCellVisible);
         LOGD("libGameCore.so base=%p, IsCellVisible(auto) hooked @ %p", (void*)gcMap.startAddress, (void*)fn);
@@ -1031,30 +932,6 @@ void hack_injec() {
     } else {
       LOGD("libGameCore.so not found - native fow hook skipped");
     }
-  }
-
-  // ── ESP: resolve accessors by name + hook ActorLinker.HOK_OnLateUpdate ──
-  {
-    void* a;
-    a = Il2CppGetMethodOffset("Scripts.GameCore.dll", "Assets.Scripts.GameLogic", "ActorLinker", "get_objCamp", 0);
-    if (a) _esp_getObjCamp = (int(*)(void*))a;
-    a = Il2CppGetMethodOffset("Scripts.GameCore.dll", "Assets.Scripts.GameLogic", "ActorLinker", "get_objType", 0);
-    if (a) _esp_getObjType = (int(*)(void*))a;
-    a = Il2CppGetMethodOffset("Scripts.GameCore.dll", "Assets.Scripts.GameLogic", "ActorLinker", "get_playerId", 0);
-    if (a) _esp_getPlayerId = (uint32_t(*)(void*))a;
-    a = Il2CppGetMethodOffset("Scripts.GameCore.dll", "Assets.Scripts.GameLogic", "GamePlayerCenter", "GetPlayerCenterManager", 0);
-    if (a) _esp_getGPC = (void*(*)())a;
-    a = Il2CppGetMethodOffset("UnityEngine.CoreModule.dll", "UnityEngine", "Camera", "get_main", 0);
-    if (a) _esp_getMainCamera = (void*(*)())a;
-    a = Il2CppGetMethodOffset("UnityEngine.CoreModule.dll", "UnityEngine", "Camera", "WorldToScreenPoint_Injected", 3);
-    if (a) _esp_world2screen = (void(*)(void*,float*,int,float*))a;
-
-    a = Il2CppGetMethodOffset("Scripts.GameCore.dll", "Assets.Scripts.GameLogic", "ActorLinker", "HOK_OnLateUpdate", 1);
-    if (a) DobbyHook(a, (void*)new_esp_HOKLateUpdate, (void**)&_esp_HOKLateUpdate);
-
-    // Aimbot: override skill aim direction
-    a = Il2CppGetMethodOffset("Scripts.GameCore.dll", "Assets.Scripts.GameLogic", "SkillControlIndicator", "GetUseSkillDirection", 0);
-    if (a) DobbyHook(a, (void*)hook_GetUseSkillDir, (void**)&_orig_GetUseSkillDir);
   }
 
   // ── Camera Zoom hooks (CameraSystem – Scripts.GameCore.dll, global namespace) ──
