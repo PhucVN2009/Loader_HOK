@@ -50,6 +50,7 @@
 #include "modskin.h"
 #include "modmap.h"
 #include "modcam.h"
+#include "modlingbao.h"
 #include "imgui/Icon.h"
 #include "imgui/Iconcpp.h"
 #include "AutoUpdate/IL2CppSDKGenerator/Il2Cpp.h"
@@ -71,8 +72,17 @@ using zygisk::Api;
 using zygisk::AppSpecializeArgs;
 using zygisk::ServerSpecializeArgs;
 
-// Your Game Package Name.
+// Your Game Package Name(s). Supports both global builds.
 char packageName[] = "com.levelinfinite.sgameGlobal.midaspay";
+static const char* g_packages[] = {
+    "com.levelinfinite.sgameGlobal",
+    "com.levelinfinite.sgameGlobal.midaspay",
+};
+static bool is_target_package(const char* name) {
+    if (!name) return false;
+    for (auto p : g_packages) if (strcmp(name, p) == 0) return true;
+    return false;
+}
 
 
 void hack();
@@ -88,7 +98,7 @@ public:
     void preAppSpecialize(AppSpecializeArgs *args) override {
         const char *process = env_->GetStringUTFChars(args->nice_name, nullptr);
 
-        is_game_ = (strcmp(process, packageName) == 0);
+        is_game_ = is_target_package(process);
 
         env_->ReleaseStringUTFChars(args->nice_name, process);
     }
@@ -349,21 +359,6 @@ void DrawLogo() {
   float hue = fmodf(ImGui::GetTime() * 0.1f, 1.0f);
   ImVec4 rainbow = HSVtoRGB(hue, 1.0f, 1.0f);
 
-  static time_t expiry_timestamp = GetExpiryTimestamp("28-10-35");
-  time_t now = time(nullptr);
-  ImVec2 window_size = ImGui::GetIO().DisplaySize;
-
-  if (now > expiry_timestamp && expiry_timestamp != 0) {
-    ImGui::SetNextWindowBgAlpha(0.75f);
-    ImGui::SetNextWindowPos(ImVec2(window_size.x / 2, window_size.y / 2), ImGuiCond_Always, ImVec2(0.5f, 0.5f));
-    ImGui::Begin("EXPIRED", nullptr, ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoResize | ImGuiWindowFlags_AlwaysAutoResize | ImGuiWindowFlags_NoMove);
-	ImGui::PushStyleColor(ImGuiCol_Text, rainbow);
-    ImGui::Text("- Note : ModMenu is expired -");
-    ImGui::End();
-	ImGui::PopStyleColor(1);
-    return;
-  }
-
   ImGui::SetNextWindowPos(ImVec2(200, 200), ImGuiCond_FirstUseEver);
 
   ImGuiWindowFlags flags = ImGuiWindowFlags_NoSavedSettings |
@@ -417,6 +412,49 @@ void DrawLogo() {
 
 inline ImVec2 operator*(const ImVec2& v, float s) {
   return ImVec2(v.x * s, v.y * s);
+}
+
+// Floating, draggable on/off button for Auto Win Linh Bao.
+// Red = off, green = on. Tap to toggle; drag to move.
+void DrawAutoWinButton() {
+  if (!ImGuiOK || !g_showAutoWinBtn) return;
+
+  ImGui::SetNextWindowPos(ImVec2(120, 360), ImGuiCond_FirstUseEver);
+  ImGuiWindowFlags flags = ImGuiWindowFlags_NoSavedSettings |
+                           ImGuiWindowFlags_AlwaysAutoResize |
+                           ImGuiWindowFlags_NoTitleBar |
+                           ImGuiWindowFlags_NoBackground;
+  ImGui::Begin("AutoWinBtn", nullptr, flags);
+
+  float size = 80.0f;
+  ImVec4 onCol (0.10f, 0.80f, 0.25f, 1.0f);   // green = on
+  ImVec4 offCol(0.85f, 0.15f, 0.15f, 1.0f);   // red   = off
+  ImVec4 c = lingbao_auto_win ? onCol : offCol;
+
+  ImGui::PushStyleVar(ImGuiStyleVar_FrameRounding, size * 0.5f);
+  ImGui::PushStyleColor(ImGuiCol_Button,        c);
+  ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(c.x, c.y, c.z, 0.85f));
+  ImGui::PushStyleColor(ImGuiCol_ButtonActive,  ImVec4(c.x, c.y, c.z, 0.70f));
+  ImGui::PushStyleColor(ImGuiCol_Text,          ImVec4(1, 1, 1, 1));
+
+  ImGui::Button(lingbao_auto_win ? "WIN\nON" : "WIN\nOFF", ImVec2(size, size));
+
+  static bool dragging = false;
+  if (ImGui::IsItemActive() && ImGui::IsMouseDragging(ImGuiMouseButton_Left)) {
+    dragging = true;
+    ImVec2 d = ImGui::GetIO().MouseDelta;
+    ImVec2 wp = ImGui::GetWindowPos();
+    ImGui::SetWindowPos(ImVec2(wp.x + d.x, wp.y + d.y));
+  }
+  if (ImGui::IsItemDeactivated()) {
+    if (!dragging && ImGui::IsItemHovered())
+      lingbao_auto_win = !lingbao_auto_win;
+    dragging = false;
+  }
+
+  ImGui::PopStyleColor(4);
+  ImGui::PopStyleVar(1);
+  ImGui::End();
 }
 
 
@@ -493,6 +531,16 @@ void DrawMenu() {
         if (m_CameraZoom) {
             ImGui::SliderInt("Zoom", &m_CameraZoomValue, 0, 100);
         }
+
+        ImGui::Spacing();
+        ImGui::Separator();
+        ImGui::Spacing();
+
+        // ── Auto Win Linh Bao Chien ────────────────────────────────────────
+        ImGui::Checkbox("Auto Win Linh Bao Chien", &g_showAutoWinBtn);
+        if (g_showAutoWinBtn)
+            ImGui::TextColored(ImColor(180, 230, 255),
+                "Nut tron noi: do = tat, xanh = bat. Keo de di chuyen.");
     }
     else if (activeFeature == 1) {
         ImGui::Columns(2, "deviceInfo", false);
@@ -588,6 +636,7 @@ inline EGLBoolean hook_eglSwapBuffers(EGLDisplay dpy, EGLSurface surface) {
   }
 
   DrawLogo();
+  DrawAutoWinButton();
   DrawMenu();
 
   ImGui::End();
@@ -727,6 +776,15 @@ pid_t get_pid_by_name(const char* process_name) {
   }
 
   closedir(proc_dir);
+  return -1;
+}
+
+// Find the game pid across any supported package name.
+pid_t get_pid_by_packages() {
+  for (auto p : g_packages) {
+    pid_t pid = get_pid_by_name(p);
+    if (pid != -1) return pid;
+  }
   return -1;
 }
 
@@ -942,6 +1000,15 @@ void hack_injec() {
     if (sz) set_ZoomRateFromAge = (set_ZoomRateFromAge_t)sz;
   }
 
+  // ── Auto Win Linh Bao (resolve by name) ──────────────────────────────────
+  {
+    void* ff = Il2CppGetMethodOffset("Scripts.Base.dll", "", "SGW", "ForceFightOver", 3);
+    if (ff) fn_ForceFightOver = (fn_ForceFightOver_t)ff;
+    void* ub = Il2CppGetMethodOffset("Scripts.GameCore.dll", "Assets.Scripts.GameSystem",
+                                     "LingBaoFightForm", "UpdateBlood", 6);
+    if (ub) DobbyHook(ub, (void*)new_UpdateBlood, (void**)&_UpdateBlood);
+  }
+
   // ── AnoSDK bypass: hook report-data functions so no reports are uploaded ──
   void* anogs = dlopen("libanogs.so", RTLD_NOLOAD);
   if (anogs) {
@@ -963,7 +1030,7 @@ void hack_thread(pid_t pid) {
 
   StartGUI();
   while(pid == -1) {
-    pid = get_pid_by_name(packageName);
+    pid = get_pid_by_packages();
   }
   remote_inject(pid);
 }
@@ -976,6 +1043,6 @@ JNIEXPORT jint JNICALL JNI_OnLoad(JavaVM *vm, void * reserved) {
 
 __attribute__((constructor))
 void lib_main() {
-  std::thread thread_hack(hack_thread, get_pid_by_name(packageName));
+  std::thread thread_hack(hack_thread, get_pid_by_packages());
   thread_hack.detach();
 }
