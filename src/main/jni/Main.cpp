@@ -16,6 +16,7 @@
 #include <android/log.h>
 #include <dlfcn.h>
 #include <pthread.h>
+#include <sys/mman.h>
 #include <sys/system_properties.h>
 
 // --- Graphics ---
@@ -874,6 +875,33 @@ static uintptr_t ResolveGCFuncByString(const char* lib, const char* str) {
   return 0;
 }
 
+// Anti-freeze patch for out-of-sight actors. In the native camp-visibility
+// function, the instruction `mov w21, w1` (F5 03 01 2A) feeds the camp-visibility
+// flag into the cull decision; forcing it to `mov w21, wzr` (F5 03 FF 2A) makes
+// OOS actors keep updating so they don't freeze. Located by a unique AOB so it
+// auto-updates across game versions (no manual offset).
+static bool ApplyAntiFreezePatch() {
+  auto maps = KittyMemory::getMapsByName("libGameCore.so");
+  // f403022a 76aa42b9 f503012a 080040f9  (mov w20,w2; ldr w22,[x19,#0x2a8]; mov w21,w1; ldr x8,[x0])
+  std::string hex  = "F4 03 02 2A 76 AA 42 B9 F5 03 01 2A 08 00 40 F9";
+  std::string mask = "xxxxxxxxxxxxxxxx";
+  for (auto& m : maps) {
+    if (!m.executable) continue;
+    uintptr_t hit = KittyScanner::findHexFirst(m.startAddress, m.endAddress, hex, mask);
+    if (hit) {
+      uintptr_t patchAddr = hit + 8;          // the `mov w21, w1`
+      uint32_t insn = 0x2AFF03F5;             // mov w21, wzr  → bytes F5 03 FF 2A
+      KittyMemory::setAddressProtection((void*)patchAddr, 4, PROT_READ | PROT_WRITE | PROT_EXEC);
+      bool ok = KittyMemory::memWrite((void*)patchAddr, &insn, 4);
+      KittyMemory::setAddressProtection((void*)patchAddr, 4, PROT_READ | PROT_EXEC);
+      LOGD("anti-freeze patch %s @ %p", ok ? "applied" : "FAILED", (void*)patchAddr);
+      return ok;
+    }
+  }
+  LOGD("anti-freeze patch: pattern not found");
+  return false;
+}
+
 void hack_injec() {
   while (!unityMap.isValid()) {
     unityMap = KittyMemory::getLibraryBaseMap("libunity.so");
@@ -931,15 +959,15 @@ void hack_injec() {
   mapAddr = Il2CppGetMethodOffset("Scripts.GameCore.dll", "", "SGC", "NtfActorMoveState", 2);
   if (mapAddr) DobbyHook(mapAddr, (void*)new_NtfActorMoveState, (void**)&_NtfActorMoveState);
 
-  // 4c: Interpolation() – Unity render-loop path (fires after Layer 7 keeps actor in lists)
-  mapAddr = Il2CppGetMethodOffset("Scripts.GameCore.dll", "Assets.Scripts.GameLogic", "ActorLinker", "Interpolation", 0);
-  if (mapAddr) DobbyHook(mapAddr, (void*)new_Interpolation, (void**)&_Interpolation);
-
-  // 4d: HOK_OnInterpolation() – SGW engine path, fires for ALL actors unconditionally.
-  //     Dual-hooks position sync: if actor was removed from ActorManager lists before
-  //     Layer 7's skip takes effect this frame, this path still catches it.
-  mapAddr = Il2CppGetMethodOffset("Scripts.GameCore.dll", "Assets.Scripts.GameLogic", "ActorLinker", "HOK_OnInterpolation", 0);
-  if (mapAddr) DobbyHook(mapAddr, (void*)new_HOKOnInterpolation, (void**)&_HOKOnInterpolation);
+  // 4c/4d DISABLED: the il2cpp Interpolation / HOK_OnInterpolation hooks ran
+  // sync_oos_transform, which wrote the frozen ActorLinker.position (0x50C) onto
+  // the transform every frame — that is what made out-of-sight enemies freeze.
+  // The native anti-freeze patch (ApplyAntiFreezePatch) handles OOS movement at
+  // the engine level instead, so these il2cpp position writes are removed.
+  // mapAddr = Il2CppGetMethodOffset("Scripts.GameCore.dll", "Assets.Scripts.GameLogic", "ActorLinker", "Interpolation", 0);
+  // if (mapAddr) DobbyHook(mapAddr, (void*)new_Interpolation, (void**)&_Interpolation);
+  // mapAddr = Il2CppGetMethodOffset("Scripts.GameCore.dll", "Assets.Scripts.GameLogic", "ActorLinker", "HOK_OnInterpolation", 0);
+  // if (mapAddr) DobbyHook(mapAddr, (void*)new_HOKOnInterpolation, (void**)&_HOKOnInterpolation);
 
   // Transform write helper: UnityEngine.Transform::set_position_Injected(ref Vector3)
   {
@@ -978,15 +1006,16 @@ void hack_injec() {
     ProcMap gcMap = KittyMemory::getLibraryBaseMap("libGameCore.so");
     for (int i = 0; i < 30 && !gcMap.isValid(); i++) { sleep(1); gcMap = KittyMemory::getLibraryBaseMap("libGameCore.so"); }
     if (gcMap.isValid()) {
-      uintptr_t fn = ResolveGCFuncByString("libGameCore.so", "IsCellVisible");
+      // (1) Fog reveal: hook the cell-visibility function (auto-resolved by string).
+      uintptr_t fn = ResolveGCFuncByString("libGameCore.so", "IsSurfaceCellVisibleConsiderNeighbor");
       if (fn) {
         DobbyHook((void*)fn, (void*)new_GC_IsCellVisible, (void**)&_GC_IsCellVisible);
         LOGD("libGameCore.so base=%p, IsCellVisible(auto) hooked @ %p", (void*)gcMap.startAddress, (void*)fn);
       } else {
-        // No stale-offset fallback: a hardcoded offset from an older build would be
-        // wrong after a game update and could crash. Skip instead (map hack off).
-        LOGD("libGameCore.so: IsCellVisible auto-resolve FAILED - map hack skipped (string not found)");
+        LOGD("libGameCore.so: cell-visible auto-resolve FAILED - fog reveal skipped");
       }
+      // (2) Anti-freeze: native patch so OOS actors keep moving (the missing piece).
+      ApplyAntiFreezePatch();
     } else {
       LOGD("libGameCore.so not found - native fow hook skipped");
     }
