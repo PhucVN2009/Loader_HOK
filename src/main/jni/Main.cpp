@@ -1006,13 +1006,28 @@ void hack_injec() {
     ProcMap gcMap = KittyMemory::getLibraryBaseMap("libGameCore.so");
     for (int i = 0; i < 30 && !gcMap.isValid(); i++) { sleep(1); gcMap = KittyMemory::getLibraryBaseMap("libGameCore.so"); }
     if (gcMap.isValid()) {
-      // (1) Fog reveal: hook the cell-visibility function (auto-resolved by string).
-      uintptr_t fn = ResolveGCFuncByString("libGameCore.so", "IsSurfaceCellVisibleConsiderNeighbor");
+      // (1) Fog reveal: hook the CORRECT IsCellVisible function. Hooking the wrong
+      // cell function (e.g. IsSurfaceCellVisibleConsiderNeighbor) desyncs the client
+      // into a 'fake match'. This one has no identifying string, so locate it by a
+      // unique masked AOB of its prologue (only the relative bl is wildcarded, so it
+      // tolerates the function shifting across game updates).
+      //   02000014 01000014 f30300aa e0030091 <bl> 0c000014 f30300aa e0030191
+      std::string cvHex  = "0200001401000014f30300aae0030091000000000c000014f30300aae0030191";
+      std::string cvMask = "xxxxxxxxxxxxxxxx????xxxxxxxxxxxx";
+      uintptr_t fn = 0;
+      {
+        auto maps = KittyMemory::getMapsByName("libGameCore.so");
+        for (auto& m : maps) {
+          if (!m.executable) continue;
+          fn = KittyScanner::findHexFirst(m.startAddress, m.endAddress, cvHex, cvMask);
+          if (fn) break;
+        }
+      }
       if (fn) {
         DobbyHook((void*)fn, (void*)new_GC_IsCellVisible, (void**)&_GC_IsCellVisible);
-        LOGD("libGameCore.so base=%p, IsCellVisible(auto) hooked @ %p", (void*)gcMap.startAddress, (void*)fn);
+        LOGD("libGameCore.so base=%p, IsCellVisible hooked @ %p", (void*)gcMap.startAddress, (void*)fn);
       } else {
-        LOGD("libGameCore.so: cell-visible auto-resolve FAILED - fog reveal skipped");
+        LOGD("libGameCore.so: IsCellVisible AOB not found - fog reveal skipped");
       }
       // (2) Anti-freeze: native patch so OOS actors keep moving (the missing piece).
       ApplyAntiFreezePatch();
