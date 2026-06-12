@@ -34,23 +34,31 @@ static void cd_LateUpdate(void* inst, int delta) {
     void* hud   = *(void**)((uint64_t)inst + 0x428);       // HudControl
     if (!skill || !hud) return;
 
-    void* arr = *(void**)((uint64_t)skill + 0x28);         // skillSlotLinkerArray
+    void* arr = *(void**)((uint64_t)skill + 0x28);         // skillSlotLinkerArray (indexed by SlotType)
     if (!arr) return;
     int32_t len = *(int32_t*)((uint64_t)arr + 0x18);       // il2cpp array length
     if (len <= 0) return;
+    if (len > 16) len = 16;
     void** data = (void**)((uint64_t)arr + 0x20);          // element pointers
 
-    int cd[4] = {0, 0, 0, 0};
-    int n = len < 4 ? len : 4;
-    for (int i = 0; i < n; i++) {
+    // Slot 0 = passive/basic; skip it. Collect every slot that holds a real skill
+    // with a cooldown — this gives the hero's 3 or 4 abilities AND the summoner
+    // spell (Flash/etc.) in slot order, skipping empty slots automatically.
+    char buf[96]; int pos = 0; int shown = 0;
+    for (int i = 1; i < len && shown < 6; i++) {
         void* slot = data[i];
         if (!slot) continue;
-        int v = *(int32_t*)((uint64_t)slot + 0x5C);        // CurSkillCD (ms)
-        cd[i] = (v > 0) ? (v + 999) / 1000 : 0;            // round up to seconds
+        void* skillObj = *(void**)((uint64_t)slot + 0x128); // SkillObj (null = empty slot)
+        if (!skillObj) continue;
+        int cdMax = *(int32_t*)((uint64_t)slot + 0x60);     // CurSkillCDMax (0 = passive/no-CD)
+        if (cdMax <= 0) continue;
+        int cur = *(int32_t*)((uint64_t)slot + 0x5C);       // CurSkillCD (ms)
+        int sec = (cur > 0) ? (cur + 999) / 1000 : 0;       // round up to seconds
+        pos += snprintf(buf + pos, sizeof(buf) - pos, "[%d]", sec);
+        shown++;
     }
+    if (shown == 0) return;
 
-    char buf[64];
-    snprintf(buf, sizeof(buf), "[%d][%d][%d][%d]", cd[0], cd[1], cd[2], cd[3]);
     void* s = (void*)String::Create(buf);
     if (s) _cd_HudChangeName(hud, s);
 }
