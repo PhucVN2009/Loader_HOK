@@ -972,80 +972,11 @@ void hack_injec() {
   skAddr = Il2CppGetMethodOffset("Scripts.System.dll", "Assets.Scripts.GameSystem", "CSelectHeroFormLogic", "WearHeroSkin", 2);
   if (skAddr) DobbyHook(skAddr, (void*)new_WearHeroSkin, (void**)&_WearHeroSkin);
 
-  // ── Map Hack hooks (FogOfWar – Scripts.GameCore.dll, global namespace) ────
-  void* mapAddr;
-  mapAddr = Il2CppGetMethodOffset("Scripts.GameCore.dll", "", "FogOfWar", "IsEnable", 0);
-  if (mapAddr) DobbyHook(mapAddr, (void*)new_FowIsEnable, (void**)&_FowIsEnable);
-
-  mapAddr = Il2CppGetMethodOffset("Scripts.GameCore.dll", "", "FogOfWar", "get_enable", 0);
-  if (mapAddr) DobbyHook(mapAddr, (void*)new_FowGetEnable, (void**)&_FowGetEnable);
-
-  mapAddr = Il2CppGetMethodOffset("Scripts.GameCore.dll", "", "FogOfWar", "get_EnableRender", 0);
-  if (mapAddr) DobbyHook(mapAddr, (void*)new_FowGetEnableRender, (void**)&_FowGetEnableRender);
-
-  // ActorLinker::SetVisible + ForceSetVisible – intercept server hide packets
-  mapAddr = Il2CppGetMethodOffset("Scripts.GameCore.dll", "Assets.Scripts.GameLogic", "ActorLinker", "SetVisible", 2);
-  if (mapAddr) DobbyHook(mapAddr, (void*)new_ActorSetVisible, (void**)&_ActorSetVisible);
-
-  mapAddr = Il2CppGetMethodOffset("Scripts.GameCore.dll", "Assets.Scripts.GameLogic", "ActorLinker", "ForceSetVisible", 2);
-  if (mapAddr) DobbyHook(mapAddr, (void*)new_ActorForceSetVisible, (void**)&_ActorForceSetVisible);
-
-  // SGC::CheckVisible – all visibility queries return true
-  mapAddr = Il2CppGetMethodOffset("Scripts.GameCore.dll", "", "SGC", "CheckVisible", 3);
-  if (mapAddr) DobbyHook(mapAddr, (void*)new_CheckVisible, (void**)&_CheckVisible);
-
-  // ── Layer 4: position sync for out-of-sight actors ───────────────────────
-  // 4a: cache real position/direction from every movement packet we see
-  mapAddr = Il2CppGetMethodOffset("Scripts.GameCore.dll", "", "SGC", "NtfActorMovementData", 1);
-  if (mapAddr) DobbyHook(mapAddr, (void*)new_NtfActorMovementData, (void**)&_NtfActorMovementData);
-
-  // 4b: cache isMoving flag
-  mapAddr = Il2CppGetMethodOffset("Scripts.GameCore.dll", "", "SGC", "NtfActorMoveState", 2);
-  if (mapAddr) DobbyHook(mapAddr, (void*)new_NtfActorMoveState, (void**)&_NtfActorMoveState);
-
-  // 4c/4d DISABLED: the il2cpp Interpolation / HOK_OnInterpolation hooks ran
-  // sync_oos_transform, which wrote the frozen ActorLinker.position (0x50C) onto
-  // the transform every frame — that is what made out-of-sight enemies freeze.
-  // The native anti-freeze patch (ApplyAntiFreezePatch) handles OOS movement at
-  // the engine level instead, so these il2cpp position writes are removed.
-  // mapAddr = Il2CppGetMethodOffset("Scripts.GameCore.dll", "Assets.Scripts.GameLogic", "ActorLinker", "Interpolation", 0);
-  // if (mapAddr) DobbyHook(mapAddr, (void*)new_Interpolation, (void**)&_Interpolation);
-  // mapAddr = Il2CppGetMethodOffset("Scripts.GameCore.dll", "Assets.Scripts.GameLogic", "ActorLinker", "HOK_OnInterpolation", 0);
-  // if (mapAddr) DobbyHook(mapAddr, (void*)new_HOKOnInterpolation, (void**)&_HOKOnInterpolation);
-
-  // Transform write helper: UnityEngine.Transform::set_position_Injected(ref Vector3)
-  {
-    void* tp = Il2CppGetMethodOffset("UnityEngine.CoreModule.dll", "UnityEngine", "Transform", "set_position_Injected", 1);
-    if (tp) _TransformSetPosInj = (void (*)(void*, float*))tp;
-  }
-
-  // ── Layer 5: HP sync for OOS actors ─────────────────────────────────────
-  mapAddr = Il2CppGetMethodOffset("Scripts.GameCore.dll", "", "SGC", "OnActorCurHpChange", 3);
-  if (mapAddr) DobbyHook(mapAddr, (void*)new_OnActorCurHpChange, (void**)&_OnActorCurHpChange);
-
-  {
-    void* fn = Il2CppGetMethodOffset("Scripts.GameCore.dll", "Assets.Scripts.GameLogic",
-                                      "ValueLinkerComponent", "SetActorHp", 2);
-    if (fn) _SetActorHp = (void (*)(void*, int32_t, int32_t))fn;
-  }
-
-  // ── Layer 6: keep HP/buff callbacks alive (skip UnregisterEvt) ───────────
-  mapAddr = Il2CppGetMethodOffset("Scripts.GameCore.dll", "", "SGC", "OnActorLeaveView_UnregisterEvt", 1);
-  if (mapAddr) DobbyHook(mapAddr, (void*)new_OnActorLeaveViewUnregEvt, (void**)&_OnActorLeaveViewUnregEvt);
-
-  // ── Layer 7: skip ActorManager::OnActorLeaveView (instance method) ──────
-  // SGC::OnActorLeaveView is left to run normally so actor.SetVisible(false)
-  // still fires → Layer-2 hook captures it → g_oosSet populated for Layers 4c/5.
-  // Only the inner ActorManager::OnActorLeaveView is suppressed so the actor
-  // stays in HeroActors/SoldierActors/... → ActorManager::Interpolation()
-  // still iterates it every frame → Layer 4c fires → positions sync.
-  mapAddr = Il2CppGetMethodOffset("Scripts.GameCore.dll", "Assets.Scripts.GameLogic", "ActorManager", "OnActorLeaveView", 2);
-  if (mapAddr) DobbyHook(mapAddr, (void*)new_ActorMgrLeaveView, (void**)&_ActorMgrLeaveView);
-
-  // ── NATIVE libGameCore.so map hack is applied LAZILY (only when the user turns
-  // Map Hack ON), on a background thread — see EnableNativeMapHack(). Nothing is
-  // hooked/patched in libGameCore at startup, so injecting never touches the game
-  // until the feature is actually used (fixes the 5s startup freeze).
+  // ── MAP HACK is NATIVE-only (libGameCore.so). All il2cpp/Unity map code was
+  // removed — it caused desync ('fake match') and frozen out-of-sight actors.
+  // The native fog-reveal hook + anti-freeze patch are applied LAZILY (only when
+  // Map Hack is turned ON), on a background thread — see EnableNativeMapHack().
+  // Nothing in libGameCore is touched at startup.
 
   // ── Camera Zoom hooks (CameraSystem – Scripts.GameCore.dll, global namespace) ──
   {
