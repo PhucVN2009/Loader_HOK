@@ -550,6 +550,11 @@ void DrawMenu() {
 
         // ── Show skill cooldown on hero name ───────────────────────────────
         ImGui::Checkbox("Hien CD ky nang tren ten", &g_showCd);
+        if (g_showCd) {
+            ImGui::Text("ChangeName fn: %s", _cd_HudChangeName ? "OK" : "NULL");
+            ImGui::Text("heroes=%d  setName=%d", g_cdDbgHeroes, g_cdDbgSet);
+            g_cdDbgHeroes = 0; g_cdDbgSet = 0;   // reset each menu frame
+        }
     }
     else if (activeFeature == 1) {
         ImGui::Columns(2, "deviceInfo", false);

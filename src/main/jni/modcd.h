@@ -19,6 +19,9 @@
 
 bool g_showCd = false;
 static uint32_t g_cdTick = 0;   // bumped from the render loop
+// diagnostics (shown in menu)
+static int g_cdDbgHeroes = 0;   // hero actors reached this frame-ish
+static int g_cdDbgSet    = 0;   // ChangeName calls made
 
 static void (*_cd_HudChangeName)(void* hud, void* nameStr) = nullptr;
 static int  (*_cd_getObjType)(void* actor) = nullptr;
@@ -27,12 +30,12 @@ static void (*_cd_origLateUpdate)(void* inst, int delta) = nullptr;
 static void cd_LateUpdate(void* inst, int delta) {
     if (_cd_origLateUpdate) _cd_origLateUpdate(inst, delta);
     if (!g_showCd || !inst || !_cd_HudChangeName) return;
-    if ((g_cdTick & 7) != 0) return;                       // ~every 8 frames
     if (_cd_getObjType && _cd_getObjType(inst) != 0) return; // heroes only (0)
 
     void* skill = *(void**)((uint64_t)inst + 0x38);        // SkillControl
     void* hud   = *(void**)((uint64_t)inst + 0x428);       // HudControl
     if (!skill || !hud) return;
+    g_cdDbgHeroes++;
 
     void* arr = *(void**)((uint64_t)skill + 0x28);         // skillSlotLinkerArray (indexed by SlotType)
     if (!arr) return;
@@ -60,5 +63,5 @@ static void cd_LateUpdate(void* inst, int delta) {
     if (shown == 0) return;
 
     void* s = (void*)String::Create(buf);
-    if (s) _cd_HudChangeName(hud, s);
+    if (s) { _cd_HudChangeName(hud, s); g_cdDbgSet++; }
 }
