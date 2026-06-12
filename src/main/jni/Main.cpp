@@ -588,6 +588,11 @@ void DrawMenu() {
 
 
 
+// Lazy native map-hack applier (defined later); kicked from the render loop.
+static bool g_nativeMapKicked  = false;   // set on the render thread (one-shot)
+static bool g_nativeMapApplied = false;
+static void EnableNativeMapHack();
+
 inline EGLBoolean (*old_eglSwapBuffers)(EGLDisplay dpy, EGLSurface surface);
 inline EGLBoolean hook_eglSwapBuffers(EGLDisplay dpy, EGLSurface surface) {
 
@@ -634,6 +639,13 @@ inline EGLBoolean hook_eglSwapBuffers(EGLDisplay dpy, EGLSurface surface) {
     } else {
       io.MouseDown[0] = false;
     }
+  }
+
+  // Apply the native map hack lazily, on a background thread, the first time the
+  // user enables Map Hack — never at startup (avoids touching the game on inject).
+  if (maphack && !g_nativeMapKicked) {
+    g_nativeMapKicked = true;
+    std::thread(EnableNativeMapHack).detach();
   }
 
   DrawLogo();
@@ -902,6 +914,38 @@ static bool ApplyAntiFreezePatch() {
   return false;
 }
 
+// Apply the native libGameCore map hack (fog-reveal hook + anti-freeze patch).
+// Called lazily on a background thread the first time Map Hack is enabled, so the
+// game is never modified at startup. Waits for libGameCore.so to be mapped.
+static void EnableNativeMapHack() {
+  ProcMap gcMap = KittyMemory::getLibraryBaseMap("libGameCore.so");
+  for (int i = 0; i < 60 && !gcMap.isValid(); i++) { sleep(1); gcMap = KittyMemory::getLibraryBaseMap("libGameCore.so"); }
+  if (!gcMap.isValid()) { LOGD("EnableNativeMapHack: libGameCore.so not mapped"); return; }
+
+  // (1) Fog reveal: hook the CORRECT IsCellVisible (base+0x284B7C0 on the known
+  // build). Hooking the wrong cell function desyncs into a 'fake match'. It has no
+  // identifying string, so locate it by a unique masked AOB of its prologue
+  // (only the relative bl is wildcarded → tolerates the function shifting).
+  std::string cvHex  = "0200001401000014f30300aae0030091000000000c000014f30300aae0030191";
+  std::string cvMask = "xxxxxxxxxxxxxxxx????xxxxxxxxxxxx";
+  uintptr_t fn = 0;
+  auto maps = KittyMemory::getMapsByName("libGameCore.so");
+  for (auto& m : maps) {
+    if (!m.executable) continue;
+    fn = KittyScanner::findHexFirst(m.startAddress, m.endAddress, cvHex, cvMask);
+    if (fn) break;
+  }
+  if (fn) {
+    DobbyHook((void*)fn, (void*)new_GC_IsCellVisible, (void**)&_GC_IsCellVisible);
+    LOGD("IsCellVisible hooked @ %p", (void*)fn);
+  } else {
+    LOGD("IsCellVisible AOB not found");
+  }
+  // (2) Anti-freeze patch so out-of-sight actors keep moving.
+  ApplyAntiFreezePatch();
+  g_nativeMapApplied = true;
+}
+
 void hack_injec() {
   while (!unityMap.isValid()) {
     unityMap = KittyMemory::getLibraryBaseMap("libunity.so");
@@ -998,43 +1042,10 @@ void hack_injec() {
   mapAddr = Il2CppGetMethodOffset("Scripts.GameCore.dll", "Assets.Scripts.GameLogic", "ActorManager", "OnActorLeaveView", 2);
   if (mapAddr) DobbyHook(mapAddr, (void*)new_ActorMgrLeaveView, (void**)&_ActorMgrLeaveView);
 
-  // ── NATIVE libGameCore.so: Horizon fog – GameGridFow::IsSurfaceCellVisibleConsiderNeighbor ──
-  // AUTO-UPDATE: resolve the function at runtime by the internal string it
-  // references, so it survives game updates (no manual offset). Falls back to the
-  // known static offset for this build if the scan fails.
-  {
-    ProcMap gcMap = KittyMemory::getLibraryBaseMap("libGameCore.so");
-    for (int i = 0; i < 30 && !gcMap.isValid(); i++) { sleep(1); gcMap = KittyMemory::getLibraryBaseMap("libGameCore.so"); }
-    if (gcMap.isValid()) {
-      // (1) Fog reveal: hook the CORRECT IsCellVisible function. Hooking the wrong
-      // cell function (e.g. IsSurfaceCellVisibleConsiderNeighbor) desyncs the client
-      // into a 'fake match'. This one has no identifying string, so locate it by a
-      // unique masked AOB of its prologue (only the relative bl is wildcarded, so it
-      // tolerates the function shifting across game updates).
-      //   02000014 01000014 f30300aa e0030091 <bl> 0c000014 f30300aa e0030191
-      std::string cvHex  = "0200001401000014f30300aae0030091000000000c000014f30300aae0030191";
-      std::string cvMask = "xxxxxxxxxxxxxxxx????xxxxxxxxxxxx";
-      uintptr_t fn = 0;
-      {
-        auto maps = KittyMemory::getMapsByName("libGameCore.so");
-        for (auto& m : maps) {
-          if (!m.executable) continue;
-          fn = KittyScanner::findHexFirst(m.startAddress, m.endAddress, cvHex, cvMask);
-          if (fn) break;
-        }
-      }
-      if (fn) {
-        DobbyHook((void*)fn, (void*)new_GC_IsCellVisible, (void**)&_GC_IsCellVisible);
-        LOGD("libGameCore.so base=%p, IsCellVisible hooked @ %p", (void*)gcMap.startAddress, (void*)fn);
-      } else {
-        LOGD("libGameCore.so: IsCellVisible AOB not found - fog reveal skipped");
-      }
-      // (2) Anti-freeze: native patch so OOS actors keep moving (the missing piece).
-      ApplyAntiFreezePatch();
-    } else {
-      LOGD("libGameCore.so not found - native fow hook skipped");
-    }
-  }
+  // ── NATIVE libGameCore.so map hack is applied LAZILY (only when the user turns
+  // Map Hack ON), on a background thread — see EnableNativeMapHack(). Nothing is
+  // hooked/patched in libGameCore at startup, so injecting never touches the game
+  // until the feature is actually used (fixes the 5s startup freeze).
 
   // ── Camera Zoom hooks (CameraSystem – Scripts.GameCore.dll, global namespace) ──
   {
