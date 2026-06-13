@@ -552,8 +552,9 @@ void DrawMenu() {
         ImGui::Checkbox("Hien CD ky nang tren ten", &g_showCd);
         if (g_showCd) {
             ImGui::Text("ChangeName fn: %s", _cd_HudChangeName ? "OK" : "NULL");
-            ImGui::Text("heroes=%d  setName=%d", g_cdDbgHeroes, g_cdDbgSet);
-            g_cdDbgHeroes = 0; g_cdDbgSet = 0;   // reset each menu frame
+            ImGui::Text("heroes=%d arr=%d len=%d slots=%d set=%d",
+                        g_cdDbgHeroes, g_cdDbgArr, g_cdDbgLen, g_cdDbgSlots, g_cdDbgSet);
+            g_cdDbgHeroes = g_cdDbgArr = g_cdDbgSlots = g_cdDbgSet = 0;
         }
     }
     else if (activeFeature == 1) {

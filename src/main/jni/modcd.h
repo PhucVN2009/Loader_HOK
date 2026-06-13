@@ -20,7 +20,10 @@
 bool g_showCd = false;
 static uint32_t g_cdTick = 0;   // bumped from the render loop
 // diagnostics (shown in menu)
-static int g_cdDbgHeroes = 0;   // hero actors reached this frame-ish
+static int g_cdDbgHeroes = 0;   // hero actors with skill+hud
+static int g_cdDbgArr    = 0;   // skillSlotLinkerArray non-null
+static int g_cdDbgLen    = -1;  // last array length seen
+static int g_cdDbgSlots  = 0;   // non-null slots found
 static int g_cdDbgSet    = 0;   // ChangeName calls made
 
 static void (*_cd_HudChangeName)(void* hud, void* nameStr) = nullptr;
@@ -37,19 +40,20 @@ static void cd_LateUpdate(void* inst, int delta) {
     if (!skill || !hud) return;
     g_cdDbgHeroes++;
 
-    void* arr = *(void**)((uint64_t)skill + 0x28);         // skillSlotLinkerArray (indexed by SlotType)
+    void* arr = *(void**)((uint64_t)skill + 0x28);         // skillSlotLinkerArray
     if (!arr) return;
+    g_cdDbgArr++;
     int32_t len = *(int32_t*)((uint64_t)arr + 0x18);       // il2cpp array length
-    if (len <= 0) return;
-    if (len > 16) len = 16;
+    g_cdDbgLen = len;
+    if (len <= 0 || len > 64) return;
     void** data = (void**)((uint64_t)arr + 0x20);          // element pointers
 
-    // Show CurSkillCD for every non-empty slot. (Earlier filter required
-    // CurSkillCDMax>0, but that is 0 until a skill is first used → nothing showed.)
+    // Show CurSkillCD for every non-empty slot.
     char buf[96]; int pos = 0; int shown = 0;
     for (int i = 0; i < len && shown < 6; i++) {
         void* slot = data[i];
         if (!slot) continue;
+        g_cdDbgSlots++;
         int cur = *(int32_t*)((uint64_t)slot + 0x5C);       // CurSkillCD (ms)
         int sec = (cur > 0) ? (cur + 999) / 1000 : 0;       // round up to seconds
         pos += snprintf(buf + pos, sizeof(buf) - pos, "[%d]", sec);
