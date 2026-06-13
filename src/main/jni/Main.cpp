@@ -52,7 +52,6 @@
 #include "modmap.h"
 #include "modcam.h"
 #include "modlingbao.h"
-#include "modcd.h"
 #include "imgui/Icon.h"
 #include "imgui/Iconcpp.h"
 #include "AutoUpdate/IL2CppSDKGenerator/Il2Cpp.h"
@@ -543,13 +542,6 @@ void DrawMenu() {
         if (g_showAutoWinBtn)
             ImGui::TextColored(ImColor(180, 230, 255),
                 "Nut tron noi: do = tat, xanh = bat. Keo de di chuyen.");
-
-        ImGui::Spacing();
-        ImGui::Separator();
-        ImGui::Spacing();
-
-        // ── Show skill cooldown overlay tab ────────────────────────────────
-        ImGui::Checkbox("Hien CD ky nang (tab rieng)", &g_showCd);
     }
     else if (activeFeature == 1) {
         ImGui::Columns(2, "deviceInfo", false);
@@ -649,8 +641,6 @@ inline EGLBoolean hook_eglSwapBuffers(EGLDisplay dpy, EGLSurface surface) {
     }
   }
 
-  g_cdTick++;
-
   // Apply the native map hack lazily, on a background thread, the first time the
   // user enables Map Hack — never at startup (avoids touching the game on inject).
   if (maphack && !g_nativeMapKicked) {
@@ -660,7 +650,6 @@ inline EGLBoolean hook_eglSwapBuffers(EGLDisplay dpy, EGLSurface surface) {
 
   DrawLogo();
   DrawAutoWinButton();
-  DrawCdOverlay();
   DrawMenu();
 
   ImGui::End();
@@ -988,18 +977,6 @@ void hack_injec() {
   // The native fog-reveal hook + anti-freeze patch are applied LAZILY (only when
   // Map Hack is turned ON), on a background thread — see EnableNativeMapHack().
   // Nothing in libGameCore is touched at startup.
-
-  // ── Show Cooldown overlay (resolve by name) ──────────────────────────────
-  {
-    void* lu = Il2CppGetMethodOffset("Scripts.GameCore.dll", "Assets.Scripts.GameLogic", "ActorLinker", "HOK_OnLateUpdate", 1);
-    if (lu) DobbyHook(lu, (void*)cd_LateUpdate, (void**)&_cd_origLateUpdate);
-    void* ot = Il2CppGetMethodOffset("Scripts.GameCore.dll", "Assets.Scripts.GameLogic", "ActorLinker", "get_objType", 0);
-    if (ot) _cd_getObjType = (int(*)(void*))ot;
-    void* oc = Il2CppGetMethodOffset("Scripts.GameCore.dll", "Assets.Scripts.GameLogic", "ActorLinker", "get_objCamp", 0);
-    if (oc) _cd_getObjCamp = (int(*)(void*))oc;
-    void* gs = Il2CppGetMethodOffset("Scripts.GameCore.dll", "Assets.Scripts.GameLogic", "SkillLinkerComponent", "GetSkillSlot", 1);
-    if (gs) _cd_GetSkillSlot = (void*(*)(void*,int))gs;
-  }
 
   // ── Camera Zoom hooks (CameraSystem – Scripts.GameCore.dll, global namespace) ──
   {
