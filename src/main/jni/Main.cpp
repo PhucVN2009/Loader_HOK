@@ -551,10 +551,9 @@ void DrawMenu() {
         // ── Show skill cooldown on hero name ───────────────────────────────
         ImGui::Checkbox("Hien CD ky nang tren ten", &g_showCd);
         if (g_showCd) {
-            ImGui::Text("ChangeName fn: %s", _cd_HudChangeName ? "OK" : "NULL");
-            ImGui::Text("heroes=%d arr=%d len=%d slots=%d set=%d",
-                        g_cdDbgHeroes, g_cdDbgArr, g_cdDbgLen, g_cdDbgSlots, g_cdDbgSet);
-            g_cdDbgHeroes = g_cdDbgArr = g_cdDbgSlots = g_cdDbgSet = 0;
+            ImGui::Text("fn: name=%s slot=%s", _cd_HudChangeName ? "OK" : "NULL", _cd_GetSkillSlot ? "OK" : "NULL");
+            ImGui::Text("heroes=%d slots=%d set=%d", g_cdDbgHeroes, g_cdDbgSlots, g_cdDbgSet);
+            g_cdDbgHeroes = g_cdDbgSlots = g_cdDbgSet = 0;
         }
     }
     else if (activeFeature == 1) {
@@ -1002,6 +1001,8 @@ void hack_injec() {
     if (cn) _cd_HudChangeName = (void(*)(void*,void*))cn;
     void* ot = Il2CppGetMethodOffset("Scripts.GameCore.dll", "Assets.Scripts.GameLogic", "ActorLinker", "get_objType", 0);
     if (ot) _cd_getObjType = (int(*)(void*))ot;
+    void* gs = Il2CppGetMethodOffset("Scripts.GameCore.dll", "Assets.Scripts.GameLogic", "SkillLinkerComponent", "GetSkillSlot", 1);
+    if (gs) _cd_GetSkillSlot = (void*(*)(void*,int))gs;
   }
 
   // ── Camera Zoom hooks (CameraSystem – Scripts.GameCore.dll, global namespace) ──
