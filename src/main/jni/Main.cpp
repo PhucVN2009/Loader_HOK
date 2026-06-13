@@ -548,13 +548,8 @@ void DrawMenu() {
         ImGui::Separator();
         ImGui::Spacing();
 
-        // ── Show skill cooldown on hero name ───────────────────────────────
-        ImGui::Checkbox("Hien CD ky nang tren ten", &g_showCd);
-        if (g_showCd) {
-            ImGui::Text("fn: setName=%s change=%s slot=%s", _cd_HudSetName ? "OK" : "NULL", _cd_HudChangeName ? "OK" : "NULL", _cd_GetSkillSlot ? "OK" : "NULL");
-            ImGui::Text("heroes=%d slots=%d set=%d", g_cdDbgHeroes, g_cdDbgSlots, g_cdDbgSet);
-            g_cdDbgHeroes = g_cdDbgSlots = g_cdDbgSet = 0;
-        }
+        // ── Show skill cooldown overlay tab ────────────────────────────────
+        ImGui::Checkbox("Hien CD ky nang (tab rieng)", &g_showCd);
     }
     else if (activeFeature == 1) {
         ImGui::Columns(2, "deviceInfo", false);
@@ -665,6 +660,7 @@ inline EGLBoolean hook_eglSwapBuffers(EGLDisplay dpy, EGLSurface surface) {
 
   DrawLogo();
   DrawAutoWinButton();
+  DrawCdOverlay();
   DrawMenu();
 
   ImGui::End();
@@ -993,16 +989,14 @@ void hack_injec() {
   // Map Hack is turned ON), on a background thread — see EnableNativeMapHack().
   // Nothing in libGameCore is touched at startup.
 
-  // ── Show Cooldown on name (resolve by name) ──────────────────────────────
+  // ── Show Cooldown overlay (resolve by name) ──────────────────────────────
   {
     void* lu = Il2CppGetMethodOffset("Scripts.GameCore.dll", "Assets.Scripts.GameLogic", "ActorLinker", "HOK_OnLateUpdate", 1);
     if (lu) DobbyHook(lu, (void*)cd_LateUpdate, (void**)&_cd_origLateUpdate);
-    void* cn = Il2CppGetMethodOffset("Scripts.GameCore.dll", "Assets.Scripts.GameLogic", "HudComponent3D", "ChangeName", 1);
-    if (cn) _cd_HudChangeName = (void(*)(void*,void*))cn;
-    void* sn = Il2CppGetMethodOffset("Scripts.GameCore.dll", "Assets.Scripts.GameLogic", "HudComponent3D", "SetActorHudName", 2);
-    if (sn) _cd_HudSetName = (void(*)(void*,void*,int))sn;
     void* ot = Il2CppGetMethodOffset("Scripts.GameCore.dll", "Assets.Scripts.GameLogic", "ActorLinker", "get_objType", 0);
     if (ot) _cd_getObjType = (int(*)(void*))ot;
+    void* oc = Il2CppGetMethodOffset("Scripts.GameCore.dll", "Assets.Scripts.GameLogic", "ActorLinker", "get_objCamp", 0);
+    if (oc) _cd_getObjCamp = (int(*)(void*))oc;
     void* gs = Il2CppGetMethodOffset("Scripts.GameCore.dll", "Assets.Scripts.GameLogic", "SkillLinkerComponent", "GetSkillSlot", 1);
     if (gs) _cd_GetSkillSlot = (void*(*)(void*,int))gs;
   }

@@ -1,66 +1,105 @@
 #pragma once
 #include <cstdint>
 #include <cstdio>
+#include <cstring>
+#include <map>
+#include <mutex>
+#include <vector>
 #include "AutoUpdate/IL2CppSDKGenerator/Il2Cpp.h"
 
 // =============================================================================
-// Show skill cooldowns on the hero name (in-match), HOK version.
+// Show each hero's skill cooldowns in a draggable/resizable ImGui overlay tab.
+// (Rewriting the in-game name via ChangeName/SetActorHudName did not display, so
+//  we draw our own panel instead.)
 //
-//   ActorLinker.SkillControl  @ 0x38   → SkillLinkerComponent
-//   ActorLinker.HudControl    @ 0x428  → HudComponent3D
-//   SkillLinkerComponent.skillSlotLinkerArray @ 0x28  (SkillSlotLinker[])
-//   SkillSlotLinker.CurSkillCD @ 0x5C  (Int32, ms)
-//   HudComponent3D.ChangeName(String)  → sets the displayed name
-//   ActorLinker.get_objType()  → 0 = hero
-//
-// All methods resolved BY NAME (auto-update). Hooked on ActorLinker.HOK_OnLateUpdate
-// which runs per actor per frame; throttled so we don't spam string allocations.
+//   ActorLinker.SkillControl @0x38  → SkillLinkerComponent
+//   ActorLinker.name         @0x4F8 → System.String (display name)
+//   SkillLinkerComponent.GetSkillSlot(SkillSlotType) → SkillSlotLinker
+//   SkillSlotLinker.CurSkillCD @0x5C (ms)
+//   ActorLinker.get_objType() == 0 → hero ; get_objCamp() → camp
 // =============================================================================
 
-bool g_showCd = false;
+bool  g_showCd  = false;
+float g_cdScale = 1.2f;
 static uint32_t g_cdTick = 0;   // bumped from the render loop
-// diagnostics (shown in menu)
-static int g_cdDbgHeroes = 0;   // hero actors with skill+hud
-static int g_cdDbgArr    = 0;   // skillSlotLinkerArray non-null
-static int g_cdDbgLen    = -1;  // last array length seen
-static int g_cdDbgSlots  = 0;   // non-null slots found
-static int g_cdDbgSet    = 0;   // ChangeName calls made
 
-static void (*_cd_HudChangeName)(void* hud, void* nameStr) = nullptr;            // ChangeName(String)
-static void (*_cd_HudSetName)(void* hud, void* nameStr, int lastTime) = nullptr; // SetActorHudName(String,int)
-static int  (*_cd_getObjType)(void* actor) = nullptr;
-static void*(*_cd_GetSkillSlot)(void* skillCtrl, int slotType) = nullptr; // SkillLinkerComponent.GetSkillSlot
+struct CdEntry {
+    uint32_t id = 0;
+    int      camp = 0;
+    char     name[40] = {0};
+    int      cd[6] = {0,0,0,0,0,0};
+    int      ncd = 0;
+    uint32_t stamp = 0;
+};
+static std::map<uint32_t, CdEntry> g_cdMap;
+static std::mutex g_cdMtx;
+
+static int  (*_cd_getObjType)(void* actor)  = nullptr;
+static int  (*_cd_getObjCamp)(void* actor)  = nullptr;
+static void*(*_cd_GetSkillSlot)(void* skillCtrl, int slotType) = nullptr;
 
 static void (*_cd_origLateUpdate)(void* inst, int delta) = nullptr;
 static void cd_LateUpdate(void* inst, int delta) {
     if (_cd_origLateUpdate) _cd_origLateUpdate(inst, delta);
     if (!g_showCd || !inst || !_cd_GetSkillSlot) return;
-    if (!_cd_HudSetName && !_cd_HudChangeName) return;
-    if (_cd_getObjType && _cd_getObjType(inst) != 0) return; // heroes only (0)
+    if ((g_cdTick & 7) != 0) return;                          // ~every 8 frames
+    if (_cd_getObjType && _cd_getObjType(inst) != 0) return;  // heroes only (0)
 
-    void* skill = *(void**)((uint64_t)inst + 0x38);        // SkillControl
-    void* hud   = *(void**)((uint64_t)inst + 0x428);       // HudControl
-    if (!skill || !hud) return;
-    g_cdDbgHeroes++;
+    uint32_t id = *(uint32_t*)((uint64_t)inst + 0x4F4);
+    if (!id) return;
+    void* skill = *(void**)((uint64_t)inst + 0x38);
+    if (!skill) return;
 
-    // Query each skill slot type via GetSkillSlot(SkillSlotType) instead of walking
-    // the raw il2cpp array (whose header layout read back garbage). Types 1..3 =
-    // skills, 4 = EX3 (4th skill, null if hero has only 3), 5/6 cover summoner.
-    char buf[96]; int pos = 0; int shown = 0;
-    for (int t = 1; t <= 6 && shown < 6; t++) {
+    int cd[6]; int n = 0;
+    for (int t = 1; t <= 6 && n < 6; t++) {
         void* slot = _cd_GetSkillSlot(skill, t);
         if (!slot) continue;
-        g_cdDbgSlots++;
-        int cur = *(int32_t*)((uint64_t)slot + 0x5C);      // CurSkillCD (ms)
-        int sec = (cur > 0) ? (cur + 999) / 1000 : 0;      // round up to seconds
-        pos += snprintf(buf + pos, sizeof(buf) - pos, "[%d]", sec);
-        shown++;
+        int cur = *(int32_t*)((uint64_t)slot + 0x5C);         // CurSkillCD (ms)
+        cd[n++] = (cur > 0) ? (cur + 999) / 1000 : 0;         // round up to seconds
     }
-    if (shown == 0) return;
+    if (n == 0) return;
 
-    void* s = (void*)String::Create(buf);
-    if (!s) return;
-    if (_cd_HudSetName)      _cd_HudSetName(hud, s, 3000);   // persistent HUD name
-    else if (_cd_HudChangeName) _cd_HudChangeName(hud, s);
-    g_cdDbgSet++;
+    int camp = _cd_getObjCamp ? _cd_getObjCamp(inst) : 0;
+
+    std::lock_guard<std::mutex> lk(g_cdMtx);
+    CdEntry& e = g_cdMap[id];
+    e.id = id; e.camp = camp; e.ncd = n;
+    for (int i = 0; i < n; i++) e.cd[i] = cd[i];
+    if (e.name[0] == 0) {                                     // read name once
+        void* nameStr = *(void**)((uint64_t)inst + 0x4F8);
+        if (nameStr) {
+            const char* nm = ((String*)nameStr)->CString();
+            if (nm) { strncpy(e.name, nm, sizeof(e.name)-1); e.name[sizeof(e.name)-1]=0; }
+        }
+    }
+    e.stamp = g_cdTick;
+}
+
+// Draggable + resizable overlay window listing every hero's cooldowns.
+static void DrawCdOverlay() {
+    if (!g_showCd) return;
+    ImGui::SetNextWindowSize(ImVec2(300, 340), ImGuiCond_FirstUseEver);
+    ImGui::SetNextWindowPos(ImVec2(20, 90), ImGuiCond_FirstUseEver);
+    if (ImGui::Begin("CD Ky Nang", &g_showCd)) {
+        ImGui::SetWindowFontScale(g_cdScale);
+        ImGui::SliderFloat("Co chu", &g_cdScale, 0.6f, 3.0f, "%.1f");
+        ImGui::Separator();
+
+        std::vector<CdEntry> snap;
+        {
+            std::lock_guard<std::mutex> lk(g_cdMtx);
+            for (auto it = g_cdMap.begin(); it != g_cdMap.end(); ) {
+                if (g_cdTick - it->second.stamp > 240) it = g_cdMap.erase(it);
+                else { snap.push_back(it->second); ++it; }
+            }
+        }
+        if (snap.empty()) ImGui::Text("...");
+        for (auto& e : snap) {
+            char line[96]; int p = 0;
+            for (int i = 0; i < e.ncd; i++) p += snprintf(line+p, sizeof(line)-p, "[%d]", e.cd[i]);
+            ImColor col = (e.camp == 2) ? ImColor(255, 90, 90) : ImColor(90, 180, 255);
+            ImGui::TextColored(col, "%s %s", e.name[0] ? e.name : "?", line);
+        }
+    }
+    ImGui::End();
 }
