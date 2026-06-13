@@ -26,14 +26,16 @@ static int g_cdDbgLen    = -1;  // last array length seen
 static int g_cdDbgSlots  = 0;   // non-null slots found
 static int g_cdDbgSet    = 0;   // ChangeName calls made
 
-static void (*_cd_HudChangeName)(void* hud, void* nameStr) = nullptr;
+static void (*_cd_HudChangeName)(void* hud, void* nameStr) = nullptr;            // ChangeName(String)
+static void (*_cd_HudSetName)(void* hud, void* nameStr, int lastTime) = nullptr; // SetActorHudName(String,int)
 static int  (*_cd_getObjType)(void* actor) = nullptr;
 static void*(*_cd_GetSkillSlot)(void* skillCtrl, int slotType) = nullptr; // SkillLinkerComponent.GetSkillSlot
 
 static void (*_cd_origLateUpdate)(void* inst, int delta) = nullptr;
 static void cd_LateUpdate(void* inst, int delta) {
     if (_cd_origLateUpdate) _cd_origLateUpdate(inst, delta);
-    if (!g_showCd || !inst || !_cd_HudChangeName || !_cd_GetSkillSlot) return;
+    if (!g_showCd || !inst || !_cd_GetSkillSlot) return;
+    if (!_cd_HudSetName && !_cd_HudChangeName) return;
     if (_cd_getObjType && _cd_getObjType(inst) != 0) return; // heroes only (0)
 
     void* skill = *(void**)((uint64_t)inst + 0x38);        // SkillControl
@@ -57,5 +59,8 @@ static void cd_LateUpdate(void* inst, int delta) {
     if (shown == 0) return;
 
     void* s = (void*)String::Create(buf);
-    if (s) { _cd_HudChangeName(hud, s); g_cdDbgSet++; }
+    if (!s) return;
+    if (_cd_HudSetName)      _cd_HudSetName(hud, s, 3000);   // persistent HUD name
+    else if (_cd_HudChangeName) _cd_HudChangeName(hud, s);
+    g_cdDbgSet++;
 }
