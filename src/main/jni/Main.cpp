@@ -968,10 +968,12 @@ void hack_injec() {
   // Map Hack is turned ON), on a background thread — see EnableNativeMapHack().
   // Nothing in libGameCore is touched at startup.
 
-  // ── AssetBundle dumper (UnityEngine.AssetBundle.LoadFromMemory_Internal) ──
+  // ── AssetBundle dumper (LoadFromMemory_Internal + LoadFromFile_Internal) ──
   {
     void* ab = Il2CppGetMethodOffset("UnityEngine.AssetBundleModule.dll", "UnityEngine", "AssetBundle", "LoadFromMemory_Internal", 2);
     if (ab) DobbyHook(ab, (void*)hook_ABLoadMem, (void**)&_orig_ABLoadMem);
+    void* af = Il2CppGetMethodOffset("UnityEngine.AssetBundleModule.dll", "UnityEngine", "AssetBundle", "LoadFromFile_Internal", 3);
+    if (af) DobbyHook(af, (void*)hook_ABLoadFile, (void**)&_orig_ABLoadFile);
   }
 
   // ── Camera Zoom hooks (CameraSystem – Scripts.GameCore.dll, global namespace) ──
