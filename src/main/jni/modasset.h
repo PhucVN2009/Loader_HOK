@@ -35,6 +35,7 @@ struct AssetRec {
 };
 static std::vector<AssetRec> g_assetList;
 static std::vector<std::string> g_scanList;
+static std::vector<std::string> g_decLog;   // decrypted file paths seen
 static std::mutex g_assetMtx;
 static size_t g_assetMem = 0;
 static const size_t g_assetMemCap = 320ULL * 1024 * 1024;
@@ -113,6 +114,27 @@ static void* hook_ABLoadFile(void* pathStr, uint32_t crc, uint64_t offset) {
     return _orig_ABLoadFile ? _orig_ABLoadFile(pathStr, crc, offset) : nullptr;
 }
 
+// ── Hook 3: Utility.GetDecryptFileName(path, ext) → reveals decrypted file path.
+// HOK uses a custom Tencent (Pandora/Puerts) pipeline; the standard AssetBundle
+// API is never called. This helper returns where the game decrypts a file to, so
+// it points us straight at the plaintext asset on disk.
+static void* (*_orig_GetDecFile)(void* pathStr, void* extStr) = nullptr;
+static void* hook_GetDecFile(void* pathStr, void* extStr) {
+    void* res = _orig_GetDecFile ? _orig_GetDecFile(pathStr, extStr) : nullptr;
+    if (g_assetMode && res) {
+        const char* p = ((String*)res)->CString();
+        if (p && p[0]) {
+            strncpy(g_assetLastPath, p, sizeof(g_assetLastPath)-1);
+            std::lock_guard<std::mutex> lk(g_assetMtx);
+            if (g_decLog.size() < 400) {
+                for (auto& s : g_decLog) if (s == p) return res;   // dedup
+                g_decLog.push_back(p);
+            }
+        }
+    }
+    return res;
+}
+
 static void asset_scan(const char* dir) {
     g_scanList.clear();
     DIR* d = opendir(dir);
@@ -137,8 +159,18 @@ static void DrawAssetUI() {
     ImGui::RadioButton("Chon tu danh sach", &g_assetMode, 2);
 
     ImGui::InputText("Luu vao", g_assetSaveDir, sizeof(g_assetSaveDir));
-    ImGui::Text("calls=%d  da luu=%d", g_assetCalls, g_assetSaved);
-    if (g_assetLastPath[0]) ImGui::TextWrapped("Game nap: %s", g_assetLastPath);
+    ImGui::Text("calls=%d  da luu=%d  decPaths=%d", g_assetCalls, g_assetSaved, (int)g_decLog.size());
+    if (g_assetLastPath[0]) ImGui::TextWrapped("Path: %s", g_assetLastPath);
+
+    // Decrypted-file paths discovered (custom Tencent pipeline). Copy the dir of
+    // one of these into "Quet" below and Scan to find the real asset files.
+    if (!g_decLog.empty()) {
+        ImGui::Text("Duong dan giai ma (%d):", (int)g_decLog.size());
+        ImGui::BeginChild("declog", ImVec2(-1, 120), true);
+        std::lock_guard<std::mutex> lk(g_assetMtx);
+        for (int i = (int)g_decLog.size()-1; i >= 0; --i) ImGui::TextUnformatted(g_decLog[i].c_str());
+        ImGui::EndChild();
+    }
 
     if (g_assetMode == 2) {
         if (ImGui::Button("Luu tat ca", ImVec2(-1, 0))) {

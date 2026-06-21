@@ -974,6 +974,9 @@ void hack_injec() {
     if (ab) DobbyHook(ab, (void*)hook_ABLoadMem, (void**)&_orig_ABLoadMem);
     void* af = Il2CppGetMethodOffset("UnityEngine.AssetBundleModule.dll", "UnityEngine", "AssetBundle", "LoadFromFile_Internal", 3);
     if (af) DobbyHook(af, (void*)hook_ABLoadFile, (void**)&_orig_ABLoadFile);
+    // Custom Tencent pipeline: reveal decrypted file paths.
+    void* gd = Il2CppGetMethodOffset("Scripts.Base.dll", "", "Utility", "GetDecryptFileName", 2);
+    if (gd) DobbyHook(gd, (void*)hook_GetDecFile, (void**)&_orig_GetDecFile);
   }
 
   // ── Camera Zoom hooks (CameraSystem – Scripts.GameCore.dll, global namespace) ──
