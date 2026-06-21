@@ -48,7 +48,6 @@
 #include "imgui/Font.h"
 #include "imgui/Roboto-Regular.h"
 #include "QQInj.h"
-#include "modskin.h"
 #include "modmap.h"
 #include "modcam.h"
 #include "modlingbao.h"
@@ -967,23 +966,6 @@ void hack_injec() {
   }
   sleep(5);
   Il2CppAttach("libil2cpp.so");
-
-  // ── Unlock Skin hooks ────────────────────────────────────────────────────
-  void* skAddr;
-  skAddr = Il2CppGetMethodOffset("Scripts.Plugins.dll", "CSProtocol", "COMDT_HERO_COMMON_INFO", "unpack", 2);
-  if (skAddr) DobbyHook(skAddr, (void*)new_unpack, (void**)&_unpack);
-
-  skAddr = Il2CppGetMethodOffset("Scripts.Base.dll", "Assets.Scripts.GameSystem", "CRoleInfo", "IsCanUseSkin", 3);
-  if (skAddr) DobbyHook(skAddr, (void*)new_IsCanUseSkin, (void**)&_IsCanUseSkin);
-
-  skAddr = Il2CppGetMethodOffset("Scripts.Base.dll", "Assets.Scripts.GameSystem", "CRoleInfo", "IsHaveHeroSkin", 4);
-  if (skAddr) DobbyHook(skAddr, (void*)new_IsHaveHeroSkin, (void**)&_IsHaveHeroSkin);
-
-  skAddr = Il2CppGetMethodOffset("Scripts.System.dll", "Assets.Scripts.GameSystem", "CSelectHeroFormLogic", "GetHeroWearSkinId", 1);
-  if (skAddr) DobbyHook(skAddr, (void*)new_GetHeroWearSkinId, (void**)&_GetHeroWearSkinId);
-
-  skAddr = Il2CppGetMethodOffset("Scripts.System.dll", "Assets.Scripts.GameSystem", "CSelectHeroFormLogic", "WearHeroSkin", 2);
-  if (skAddr) DobbyHook(skAddr, (void*)new_WearHeroSkin, (void**)&_WearHeroSkin);
 
   // ── MAP HACK is NATIVE-only (libGameCore.so). All il2cpp/Unity map code was
   // removed — it caused desync ('fake match') and frozen out-of-sight actors.
