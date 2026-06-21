@@ -916,31 +916,28 @@ static uintptr_t ResolveGCFuncByString(const char* lib, const char* str) {
   return 0;
 }
 
-// Anti-freeze patch for out-of-sight actors. In the native camp-visibility
-// function, the instruction `mov w21, w1` (F5 03 01 2A) feeds the camp-visibility
-// flag into the cull decision; forcing it to `mov w21, wzr` (F5 03 FF 2A) makes
-// OOS actors keep updating so they don't freeze. Located by a unique AOB so it
-// auto-updates across game versions (no manual offset).
-static bool ApplyAntiFreezePatch() {
-  auto maps = KittyMemory::getMapsByName("libGameCore.so");
-  // f403022a 76aa42b9 f503012a 080040f9  (mov w20,w2; ldr w22,[x19,#0x2a8]; mov w21,w1; ldr x8,[x0])
-  std::string hex  = "F4 03 02 2A 76 AA 42 B9 F5 03 01 2A 08 00 40 F9";
-  std::string mask = "xxxxxxxxxxxxxxxx";
-  for (auto& m : maps) {
-    if (!m.executable) continue;
-    uintptr_t hit = KittyScanner::findHexFirst(m.startAddress, m.endAddress, hex, mask);
-    if (hit) {
-      uintptr_t patchAddr = hit + 8;          // the `mov w21, w1`
-      uint32_t insn = 0x2AFF03F5;             // mov w21, wzr  → bytes F5 03 FF 2A
-      KittyMemory::setAddressProtection((void*)patchAddr, 4, PROT_READ | PROT_WRITE | PROT_EXEC);
-      bool ok = KittyMemory::memWrite((void*)patchAddr, &insn, 4);
-      KittyMemory::setAddressProtection((void*)patchAddr, 4, PROT_READ | PROT_EXEC);
-      LOGD("anti-freeze patch %s @ %p", ok ? "applied" : "FAILED", (void*)patchAddr);
-      return ok;
-    }
-  }
-  LOGD("anti-freeze patch: pattern not found");
-  return false;
+// ── Manual native offsets (libGameCore.so) ───────────────────────────────────
+// libGameCore is a native engine lib, NOT il2cpp, so it can't be resolved by
+// method name and AOB scanning is unreliable here — use the fixed offsets that
+// match the current build (confirmed working).
+//   IsCellVisible  : base + 0x284B7C0
+//   Anti-freeze B  : base + 0x37B9BE4   (F5 03 01 2A → F5 03 FF 2A)
+static const uintptr_t GC_OFF_IsCellVisible = 0x284B7C0;
+static const uintptr_t GC_OFF_AntiFreeze    = 0x37B9BE4;
+
+// Anti-freeze patch for out-of-sight actors. At base+0x37B9BE4 the instruction
+// `mov w21, w1` (F5 03 01 2A) feeds the camp-visibility flag into the cull
+// decision; forcing it to `mov w21, wzr` (F5 03 FF 2A) keeps OOS actors updating
+// so they don't freeze.
+static bool ApplyAntiFreezePatch(uintptr_t base) {
+  if (!base) return false;
+  uintptr_t patchAddr = base + GC_OFF_AntiFreeze;
+  uint32_t insn = 0x2AFF03F5;               // mov w21, wzr  → bytes F5 03 FF 2A
+  KittyMemory::setAddressProtection((void*)patchAddr, 4, PROT_READ | PROT_WRITE | PROT_EXEC);
+  bool ok = KittyMemory::memWrite((void*)patchAddr, &insn, 4);
+  KittyMemory::setAddressProtection((void*)patchAddr, 4, PROT_READ | PROT_EXEC);
+  LOGD("anti-freeze patch %s @ %p", ok ? "applied" : "FAILED", (void*)patchAddr);
+  return ok;
 }
 
 // Apply the native libGameCore map hack (fog-reveal hook + anti-freeze patch).
@@ -951,27 +948,18 @@ static void EnableNativeMapHack() {
   for (int i = 0; i < 60 && !gcMap.isValid(); i++) { sleep(1); gcMap = KittyMemory::getLibraryBaseMap("libGameCore.so"); }
   if (!gcMap.isValid()) { LOGD("EnableNativeMapHack: libGameCore.so not mapped"); return; }
 
-  // (1) Fog reveal: hook the CORRECT IsCellVisible (base+0x284B7C0 on the known
-  // build). Hooking the wrong cell function desyncs into a 'fake match'. It has no
-  // identifying string, so locate it by a unique masked AOB of its prologue
-  // (only the relative bl is wildcarded → tolerates the function shifting).
-  std::string cvHex  = "0200001401000014f30300aae0030091000000000c000014f30300aae0030191";
-  std::string cvMask = "xxxxxxxxxxxxxxxx????xxxxxxxxxxxx";
-  uintptr_t fn = 0;
-  auto maps = KittyMemory::getMapsByName("libGameCore.so");
-  for (auto& m : maps) {
-    if (!m.executable) continue;
-    fn = KittyScanner::findHexFirst(m.startAddress, m.endAddress, cvHex, cvMask);
-    if (fn) break;
-  }
-  if (fn) {
-    DobbyHook((void*)fn, (void*)new_GC_IsCellVisible, (void**)&_GC_IsCellVisible);
-    LOGD("IsCellVisible hooked @ %p", (void*)fn);
-  } else {
-    LOGD("IsCellVisible AOB not found");
-  }
+  uintptr_t base = gcMap.startAddress;
+
+  // (1) Fog reveal: hook the CORRECT IsCellVisible at the fixed manual offset
+  // (base + 0x284B7C0). Hooking the wrong cell function desyncs into a 'fake
+  // match'. libGameCore is native (not il2cpp) so we use the known offset rather
+  // than name resolution / AOB scanning.
+  uintptr_t fn = base + GC_OFF_IsCellVisible;
+  DobbyHook((void*)fn, (void*)new_GC_IsCellVisible, (void**)&_GC_IsCellVisible);
+  LOGD("IsCellVisible hooked @ %p (base %p + 0x%lx)", (void*)fn, (void*)base, (unsigned long)GC_OFF_IsCellVisible);
+
   // (2) Anti-freeze patch so out-of-sight actors keep moving.
-  ApplyAntiFreezePatch();
+  ApplyAntiFreezePatch(base);
   g_nativeMapApplied = true;
 }
 
