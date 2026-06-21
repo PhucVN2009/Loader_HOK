@@ -52,6 +52,7 @@
 #include "modcam.h"
 #include "modlingbao.h"
 #include "modasset.h"
+#include "modvfs.h"
 #include "imgui/Icon.h"
 #include "imgui/Iconcpp.h"
 #include "AutoUpdate/IL2CppSDKGenerator/Il2Cpp.h"
@@ -547,6 +548,19 @@ void DrawMenu() {
         ImGui::Separator();
         ImGui::Spacing();
 
+        // ── Dump file game (QtsVFS) ────────────────────────────────────────
+        ImGui::TextColored(ImColor(255, 220, 120), "Dump tai nguyen (QtsVFS)");
+        ImGui::Checkbox("Bat dump file game", &g_vfsDump);
+        ImGui::Text("hook=%s  mo=%d  da luu=%d",
+                    g_vfsHooked ? "OK" : "...", g_vfsOpened, g_vfsWritten);
+        if (g_vfsLast[0]) ImGui::TextWrapped("File: %s", g_vfsLast);
+        ImGui::TextColored(ImColor(150, 150, 150),
+            "Luu vao thu muc 'Luu vao' o duoi. Bat roi vao tran de game doc file.");
+
+        ImGui::Spacing();
+        ImGui::Separator();
+        ImGui::Spacing();
+
         // ── Dump AssetBundle ───────────────────────────────────────────────
         DrawAssetUI();
     }
@@ -653,6 +667,14 @@ inline EGLBoolean hook_eglSwapBuffers(EGLDisplay dpy, EGLSurface surface) {
   if (maphack && !g_nativeMapKicked) {
     g_nativeMapKicked = true;
     std::thread(EnableNativeMapHack).detach();
+  }
+
+  // Install the QtsVFS hooks lazily, on a background thread, the first time the
+  // user enables VFS dump (libQtsVFS.so may not be loaded yet at inject time).
+  static bool g_vfsKicked = false;
+  if (g_vfsDump && !g_vfsKicked) {
+    g_vfsKicked = true;
+    std::thread(InstallVfsHooks).detach();
   }
 
   DrawLogo();
