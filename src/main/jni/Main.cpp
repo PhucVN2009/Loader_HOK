@@ -548,12 +548,7 @@ void DrawMenu() {
         ImGui::Spacing();
 
         // ── Dump AssetBundle ───────────────────────────────────────────────
-        ImGui::Checkbox("Dump AssetBundle", &g_dumpAssets);
-        if (g_dumpAssets) {
-            ImGui::TextColored(ImColor(180, 230, 255),
-                "Luu vao /sdcard/HOK_dump/  (mo bang AssetStudio)");
-            ImGui::Text("calls=%d  files=%d", g_assetCalls, g_assetCount);
-        }
+        DrawAssetUI();
     }
     else if (activeFeature == 1) {
         ImGui::Columns(2, "deviceInfo", false);
