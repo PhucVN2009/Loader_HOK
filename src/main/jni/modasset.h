@@ -121,7 +121,7 @@ static void* hook_ABLoadFile(void* pathStr, uint32_t crc, uint64_t offset) {
 static void* (*_orig_GetDecFile)(void* pathStr, void* extStr) = nullptr;
 static void* hook_GetDecFile(void* pathStr, void* extStr) {
     void* res = _orig_GetDecFile ? _orig_GetDecFile(pathStr, extStr) : nullptr;
-    if (g_assetMode && res) {
+    if (res) {   // always log (independent of dump mode) so paths show up
         const char* p = ((String*)res)->CString();
         if (p && p[0]) {
             strncpy(g_assetLastPath, p, sizeof(g_assetLastPath)-1);
