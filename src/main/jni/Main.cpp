@@ -52,6 +52,7 @@
 #include "modmap.h"
 #include "modcam.h"
 #include "modlingbao.h"
+#include "modasset.h"
 #include "imgui/Icon.h"
 #include "imgui/Iconcpp.h"
 #include "AutoUpdate/IL2CppSDKGenerator/Il2Cpp.h"
@@ -542,6 +543,18 @@ void DrawMenu() {
         if (g_showAutoWinBtn)
             ImGui::TextColored(ImColor(180, 230, 255),
                 "Nut tron noi: do = tat, xanh = bat. Keo de di chuyen.");
+
+        ImGui::Spacing();
+        ImGui::Separator();
+        ImGui::Spacing();
+
+        // ── Dump AssetBundle ───────────────────────────────────────────────
+        ImGui::Checkbox("Dump AssetBundle", &g_dumpAssets);
+        if (g_dumpAssets) {
+            ImGui::TextColored(ImColor(180, 230, 255),
+                "Luu vao /sdcard/HOK_dump/  (mo bang AssetStudio)");
+            ImGui::Text("calls=%d  files=%d", g_assetCalls, g_assetCount);
+        }
     }
     else if (activeFeature == 1) {
         ImGui::Columns(2, "deviceInfo", false);
@@ -977,6 +990,12 @@ void hack_injec() {
   // The native fog-reveal hook + anti-freeze patch are applied LAZILY (only when
   // Map Hack is turned ON), on a background thread — see EnableNativeMapHack().
   // Nothing in libGameCore is touched at startup.
+
+  // ── AssetBundle dumper (UnityEngine.AssetBundle.LoadFromMemory_Internal) ──
+  {
+    void* ab = Il2CppGetMethodOffset("UnityEngine.AssetBundleModule.dll", "UnityEngine", "AssetBundle", "LoadFromMemory_Internal", 2);
+    if (ab) DobbyHook(ab, (void*)hook_ABLoadMem, (void**)&_orig_ABLoadMem);
+  }
 
   // ── Camera Zoom hooks (CameraSystem – Scripts.GameCore.dll, global namespace) ──
   {
